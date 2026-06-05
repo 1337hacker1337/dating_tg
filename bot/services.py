@@ -7,34 +7,35 @@ from config import settings
 from db.models import GenderEnum, LookingForEnum, User
 from db.repositories.user_repo import UserRepository
 from db.repositories.like_repo import LikeRepository, MatchRepository
+from db.repositories.rating_repo import RatingRepository
 
 MAX_PHOTOS = 5
 
 
 @dataclass
 class MatchResult:
-    matched: bool
-    is_new_match: bool = False   # True только при первом мэтче
-    notify_like: bool = False    # True если лайк новый (не повторный)
-    partner: Optional[User] = None
+    matched:      bool
+    is_new_match: bool = False
+    notify_like:  bool = False
+    partner:      Optional[User] = None
 
 
 class ProfileService:
     def __init__(self, session: AsyncSession):
         self.session = session
-        self.users = UserRepository(session)
+        self.users   = UserRepository(session)
 
     async def register(
         self,
-        user_id: int,
-        username: Optional[str],
-        name: str,
-        age: int,
-        gender: str,
+        user_id:     int,
+        username:    Optional[str],
+        name:        str,
+        age:         int,
+        gender:      str,
         looking_for: str,
-        bio: Optional[str],
-        latitude: Optional[float] = None,
-        longitude: Optional[float] = None,
+        bio:         Optional[str],
+        latitude:    Optional[float] = None,
+        longitude:   Optional[float] = None,
     ) -> User:
         user = await self.users.create(
             user_id=user_id,
@@ -86,16 +87,7 @@ class BrowseService:
         )
 
     async def react(self, from_user_id: int, to_user_id: int, liked: bool) -> MatchResult:
-        """
-        Записывает лайк/дизлайк (upsert — повторный не упадёт).
-        Возвращает MatchResult с флагами:
-          - is_new_match  → только что создан мэтч
-          - notify_like   → лайк новый, уведомить получателя
-          - partner       → объект партнёра при мэтче
-        """
-        # Проверяем был ли уже лайк ДО записи
         was_already_liked = await self.likes.already_liked(from_user_id, to_user_id)
-
         await self.likes.add(from_user_id, to_user_id, liked)
 
         if liked:
@@ -108,11 +100,9 @@ class BrowseService:
                     await self.session.commit()
                     return MatchResult(matched=True, is_new_match=True,
                                        notify_like=False, partner=partner)
-                # Мэтч уже был — ничего не делаем
                 await self.session.commit()
                 return MatchResult(matched=True, is_new_match=False)
 
-            # Лайк без мэтча — уведомляем только если лайк новый
             await self.session.commit()
             return MatchResult(matched=False, notify_like=not was_already_liked)
 
@@ -121,3 +111,21 @@ class BrowseService:
 
     async def get_matches(self, user_id: int) -> list[User]:
         return await self.matches.list_for_user(user_id)
+
+
+# ── НОВОЕ ────────────────────────────────────────────────────────
+class RatingService:
+    """Сохраняет голос и пересчитывает ранг пользователя на лету."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+        self.repo    = RatingRepository(session)
+
+    async def vote(self, voter_id: int, target_id: int, score: int) -> float:
+        """
+        Записывает оценку, пересчитывает avg_rating в users,
+        возвращает новое avg_rating.
+        """
+        await self.repo.upsert(voter_id, target_id, score)
+        await self.session.commit()
+        return await self.repo.get_avg(target_id)

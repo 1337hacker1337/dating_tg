@@ -3,9 +3,9 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import update, select, func
-from db.models import User, GenderEnum, LookingForEnum, Like, Match
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.models import User, GenderEnum, LookingForEnum, Like, Match
 from bot.keyboards import kb_main_menu, kb_profile_actions, kb_match, kb_location, remove_kb
 from bot.services import ProfileService, BrowseService
 from bot.states import EditProfile
@@ -16,9 +16,34 @@ router = Router()
 GENDER_MAP = {"male": "Мужской", "female": "Женский", "other": "Другой"}
 LF_MAP     = {"male": "Парней",  "female": "Девушек", "any": "Всех"}
 
+# ── Ранги ────────────────────────────────────────────────────────
+_TIERS = [
+    (3.0,  "sub3",     "🚫"),
+    (5.0,  "sub5",     "📉"),
+    (6.0,  "ltn",      "👤"),
+    (7.0,  "mtn",      "📊"),
+    (7.10, "htn",      "🌟"),
+    (8.5,  "chadlite", "⚡"),
+]
+_CHAD = ("chad", "👑")
 
+
+def get_tier(avg: float) -> tuple[str, str]:
+    for threshold, slug, emoji in _TIERS:
+        if avg < threshold:
+            return slug, emoji
+    return _CHAD
+
+
+def tier_line(avg: float, count: int) -> str:
+    if count == 0:
+        return "🏷 <i>Ранг ещё не определён</i>"
+    slug, emoji = get_tier(avg)
+    return f"🏆 Ранг: <b>{emoji} {slug}</b>  <code>({avg:.1f}/10 · {count} голосов)</code>"
+
+
+# ── Текст профиля ────────────────────────────────────────────────
 async def _profile_text(user: User, session) -> str:
-    # Статистика
     likes_in = await session.execute(
         select(func.count()).where(Like.to_user == user.id, Like.value.is_(True))
     )
@@ -32,19 +57,26 @@ async def _profile_text(user: User, session) -> str:
     )
 
     lines = [
-        f"<b>👤 {user.name}</b>, {user.age}",
-        f"Пол: {GENDER_MAP.get(user.gender.value, user.gender.value)}",
-        f"Ищу: {LF_MAP.get(user.looking_for.value, user.looking_for.value)}",
+        f"👤 <b>{user.name}</b>, <code>{user.age}</code>",
+        f"├─ Пол: <i>{GENDER_MAP.get(user.gender.value, user.gender.value)}</i>",
+        f"├─ Ищу: <i>{LF_MAP.get(user.looking_for.value, user.looking_for.value)}</i>",
     ]
     if user.bio:
-        lines.append(f"\n{user.bio}")
-    lines.append("\n📍 Геолокация указана" if user.latitude is not None else "\n📍 Геолокация не указана")
-    lines.append(f"Анкета: {'✅ Активна' if user.is_active else '🙈 Скрыта'}")
+        lines.append(f"├─ 📝 <code>«{user.bio}»</code>")
+
     lines.append(
-        f"\n📊 Статистика:"
-        f"\n  ❤️ Лайков получено: {likes_in.scalar()}"
-        f"\n  💔 Дизлайков: {dislikes_in.scalar()}"
-        f"\n  💌 Мэтчей: {matches_count.scalar()}"
+        "├─ 📍 <i>Геолокация указана</i>" if user.latitude is not None
+        else "├─ 📍 <i>Геолокация не указана</i>"
+    )
+    lines.append(
+        f"├─ Анкета: {'✅ <i>Активна</i>' if user.is_active else '🙈 <i>Скрыта</i>'}"
+    )
+    lines.append(tier_line(user.avg_rating, user.rating_count))
+    lines.append(
+        f"\n📊 <b>Статистика</b>\n"
+        f"├─ ❤️ Лайков: <code>{likes_in.scalar()}</code>\n"
+        f"├─ 💔 Дизлайков: <code>{dislikes_in.scalar()}</code>\n"
+        f"└─ 💌 Мэтчей: <code>{matches_count.scalar()}</code>"
     )
     return "\n".join(lines)
 
@@ -69,7 +101,12 @@ def _kb_done_photos():
 @router.callback_query(F.data == "menu")
 async def show_menu(call: CallbackQuery):
     await call.answer()
-    await _safe_answer(call, "Главное меню:", reply_markup=kb_main_menu())
+    await _safe_answer(
+        call,
+        "🌌 <b>Главное меню</b>\n└─ <i>Выбери действие:</i>",
+        parse_mode="HTML",
+        reply_markup=kb_main_menu(),
+    )
 
 
 # ───────────────────────────────────────────────────────────────
@@ -86,8 +123,12 @@ async def show_my_profile(call: CallbackQuery, session: AsyncSession):
     await call.answer()
     text = await _profile_text(user, session)
     if user.photos:
-        await call.message.answer_photo(photo=user.photos[0].file_id, caption=text,
-                                        reply_markup=kb_profile_actions(), parse_mode="HTML")
+        await call.message.answer_photo(
+            photo=user.photos[0].file_id,
+            caption=text,
+            reply_markup=kb_profile_actions(),
+            parse_mode="HTML",
+        )
     else:
         await call.message.answer(text, reply_markup=kb_profile_actions(), parse_mode="HTML")
 
@@ -109,7 +150,11 @@ async def edit_profile_menu(call: CallbackQuery):
     builder.button(text="◀️ Назад",      callback_data="my_profile")
     builder.adjust(2)
     await call.answer()
-    await call.message.answer("Что хочешь изменить?", reply_markup=builder.as_markup())
+    await call.message.answer(
+        "✏️ <b>Что хочешь изменить?</b>",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(),
+    )
 
 
 @router.callback_query(F.data.startswith("edit:"))
@@ -118,17 +163,26 @@ async def edit_field_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
     if field == "name":
-        await call.message.answer("Введи новое имя:")
+        await call.message.answer(
+            "📝 <b>Введи новое имя:</b>",
+            parse_mode="HTML",
+        )
         await state.set_state(EditProfile.new_value)
         await state.update_data(edit_field="name")
 
     elif field == "age":
-        await call.message.answer("Введи новый возраст (18–99):")
+        await call.message.answer(
+            "🎂 <b>Введи новый возраст</b> <code>(18–99)</code>:",
+            parse_mode="HTML",
+        )
         await state.set_state(EditProfile.new_value)
         await state.update_data(edit_field="age")
 
     elif field == "bio":
-        await call.message.answer("Напиши новый текст о себе (до 500 символов):")
+        await call.message.answer(
+            "💬 <b>Напиши новое «О себе»</b> <i>(до 500 символов)</i>:",
+            parse_mode="HTML",
+        )
         await state.set_state(EditProfile.new_value)
         await state.update_data(edit_field="bio")
 
@@ -138,7 +192,11 @@ async def edit_field_start(call: CallbackQuery, state: FSMContext):
         builder.button(text="Женский", callback_data="set_gender:female")
         builder.button(text="Другой",  callback_data="set_gender:other")
         builder.adjust(2, 1)
-        await call.message.answer("Выбери новый пол:", reply_markup=builder.as_markup())
+        await call.message.answer(
+            "⚧ <b>Выбери новый пол:</b>",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup(),
+        )
 
     elif field == "looking_for":
         builder = InlineKeyboardBuilder()
@@ -146,38 +204,53 @@ async def edit_field_start(call: CallbackQuery, state: FSMContext):
         builder.button(text="Девушек", callback_data="set_lf:female")
         builder.button(text="Всех",    callback_data="set_lf:any")
         builder.adjust(2, 1)
-        await call.message.answer("Кого ищешь?", reply_markup=builder.as_markup())
+        await call.message.answer(
+            "🔍 <b>Кого ищешь?</b>",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup(),
+        )
 
     elif field == "photos":
         await call.message.answer(
-            "Отправь новые фото (старые будут заменены, до 5 шт.).\nКогда закончишь — нажми «Готово»:",
+            "📸 <b>Отправь новые фото</b> <i>(старые будут заменены, до 5 шт.)</i>\n"
+            "└─ Когда закончишь — нажми «Готово»:",
+            parse_mode="HTML",
             reply_markup=_kb_done_photos(),
         )
         await state.set_state(EditProfile.new_photo)
         await state.update_data(new_photo_ids=[])
 
 
-# Смена пола
 @router.callback_query(F.data.startswith("set_gender:"))
 async def set_gender(call: CallbackQuery, session: AsyncSession):
     val = call.data.split(":")[1]
-    await session.execute(update(User).where(User.id == call.from_user.id).values(gender=GenderEnum(val)))
+    await session.execute(
+        update(User).where(User.id == call.from_user.id).values(gender=GenderEnum(val))
+    )
     await session.commit()
-    await call.answer(f"Пол изменён на «{GENDER_MAP[val]}» ✅", show_alert=True)
-    await call.message.answer("Главное меню:", reply_markup=kb_main_menu())
+    await call.answer(f"✅ Пол изменён на «{GENDER_MAP[val]}»", show_alert=True)
+    await call.message.answer(
+        "🌌 <b>Главное меню</b>",
+        parse_mode="HTML",
+        reply_markup=kb_main_menu(),
+    )
 
 
-# Смена «кого ищу»
 @router.callback_query(F.data.startswith("set_lf:"))
 async def set_looking_for(call: CallbackQuery, session: AsyncSession):
     val = call.data.split(":")[1]
-    await session.execute(update(User).where(User.id == call.from_user.id).values(looking_for=LookingForEnum(val)))
+    await session.execute(
+        update(User).where(User.id == call.from_user.id).values(looking_for=LookingForEnum(val))
+    )
     await session.commit()
-    await call.answer(f"Теперь ищешь: {LF_MAP[val]} ✅", show_alert=True)
-    await call.message.answer("Главное меню:", reply_markup=kb_main_menu())
+    await call.answer(f"✅ Теперь ищешь: {LF_MAP[val]}", show_alert=True)
+    await call.message.answer(
+        "🌌 <b>Главное меню</b>",
+        parse_mode="HTML",
+        reply_markup=kb_main_menu(),
+    )
 
 
-# Применение текстовых правок
 @router.message(EditProfile.new_value)
 async def apply_edit_value(message: Message, state: FSMContext, session: AsyncSession):
     data  = await state.get_data()
@@ -186,51 +259,76 @@ async def apply_edit_value(message: Message, state: FSMContext, session: AsyncSe
     if field == "name":
         val = (message.text or "").strip()
         if not val or len(val) > 64:
-            await message.answer("Имя от 1 до 64 символов:")
+            await message.answer(
+                "🔮 <b>Ошибка</b>\n└ <code>Имя от 1 до 64 символов:</code>",
+                parse_mode="HTML",
+            )
             return
         await session.execute(update(User).where(User.id == message.from_user.id).values(name=val))
         await session.commit()
-        await message.answer(f"✅ Имя изменено на «{val}»", reply_markup=kb_main_menu())
+        await message.answer(
+            f"✅ <b>Имя изменено на «{val}»</b>",
+            parse_mode="HTML",
+            reply_markup=kb_main_menu(),
+        )
 
     elif field == "age":
         txt = (message.text or "").strip()
         if not txt.isdigit() or not (18 <= int(txt) <= 99):
-            await message.answer("Возраст числом от 18 до 99:")
+            await message.answer(
+                "🔮 <b>Ошибка</b>\n└ <code>Возраст от 18 до 99:</code>",
+                parse_mode="HTML",
+            )
             return
         await session.execute(update(User).where(User.id == message.from_user.id).values(age=int(txt)))
         await session.commit()
-        await message.answer(f"✅ Возраст изменён на {txt}", reply_markup=kb_main_menu())
+        await message.answer(
+            f"✅ <b>Возраст изменён на {txt}</b>",
+            parse_mode="HTML",
+            reply_markup=kb_main_menu(),
+        )
 
     elif field == "bio":
         val = (message.text or "").strip()
         if len(val) > 500:
-            await message.answer("Не более 500 символов:")
+            await message.answer(
+                "🔮 <b>Слишком длинно</b>\n└ <code>Не более 500 символов:</code>",
+                parse_mode="HTML",
+            )
             return
-        await session.execute(update(User).where(User.id == message.from_user.id).values(bio=val or None))
+        await session.execute(
+            update(User).where(User.id == message.from_user.id).values(bio=val or None)
+        )
         await session.commit()
-        await message.answer("✅ Описание обновлено", reply_markup=kb_main_menu())
-
-    elif field == "location":
-        # обрабатывается отдельным хэндлером F.location
-        return
+        await message.answer(
+            "✅ <b>Описание обновлено</b>",
+            parse_mode="HTML",
+            reply_markup=kb_main_menu(),
+        )
 
     await state.clear()
 
 
-# ───────────────────────────────────────────────────────────────
-# Редактирование фото
-# ───────────────────────────────────────────────────────────────
+# ── Редактирование фото ──────────────────────────────────────────
 
 @router.message(EditProfile.new_photo, F.photo)
 async def collect_edit_photo(message: Message, state: FSMContext):
     data = await state.get_data()
     ids: list = data.get("new_photo_ids", [])
     if len(ids) >= 5:
-        await message.answer("Максимум 5 фото. Нажми «Готово»:", reply_markup=_kb_done_photos())
+        await message.answer(
+            "🔮 <b>Максимум 5 фото</b>\n└ <code>Нажми «Готово»:</code>",
+            parse_mode="HTML",
+            reply_markup=_kb_done_photos(),
+        )
         return
     ids.append(message.photo[-1].file_id)
     await state.update_data(new_photo_ids=ids)
-    await message.answer(f"Фото {len(ids)}/5 принято.", reply_markup=_kb_done_photos())
+    await message.answer(
+        f"✅ <b>Фото {len(ids)}/5 принято</b>",
+        parse_mode="HTML",
+        reply_markup=_kb_done_photos(),
+    )
 
 
 @router.callback_query(EditProfile.new_photo, F.data == "edit_photos_done")
@@ -244,15 +342,14 @@ async def save_edit_photos(call: CallbackQuery, state: FSMContext, session: Asyn
     await session.commit()
     await state.clear()
     await call.message.answer(
-        f"✅ Фото обновлены ({len(ids)} шт.)" if ids else "✅ Фото удалены",
+        f"✅ <b>Фото обновлены</b> <code>({len(ids)} шт.)</code>" if ids else "✅ <b>Фото удалены</b>",
+        parse_mode="HTML",
         reply_markup=kb_main_menu(),
     )
     await call.answer()
 
 
-# ───────────────────────────────────────────────────────────────
-# Скрыть / показать анкету
-# ───────────────────────────────────────────────────────────────
+# ── Скрыть / Показать / Удалить ──────────────────────────────────
 
 @router.callback_query(F.data == "hide_profile")
 async def hide_profile(call: CallbackQuery, session: AsyncSession):
@@ -261,7 +358,7 @@ async def hide_profile(call: CallbackQuery, session: AsyncSession):
     if user and user.is_active:
         await repo.set_active(call.from_user.id, False)
         await session.commit()
-        await call.answer("Анкета скрыта 🙈", show_alert=True)
+        await call.answer("🙈 Анкета скрыта", show_alert=True)
     else:
         await call.answer("Анкета уже скрыта.")
 
@@ -273,24 +370,21 @@ async def show_profile_handler(call: CallbackQuery, session: AsyncSession):
     if user and not user.is_active:
         await repo.set_active(call.from_user.id, True)
         await session.commit()
-        await call.answer("Анкета снова видна ✅", show_alert=True)
+        await call.answer("✅ Анкета снова видна", show_alert=True)
     else:
         await call.answer("Анкета уже активна.")
 
 
-# ───────────────────────────────────────────────────────────────
-# Удалить анкету
-# ───────────────────────────────────────────────────────────────
-
 @router.callback_query(F.data == "delete_profile")
 async def confirm_delete(call: CallbackQuery):
     builder = InlineKeyboardBuilder()
-    builder.button(text="🗑 Да, удалить",  callback_data="delete_confirmed")
-    builder.button(text="◀️ Отмена",       callback_data="my_profile")
+    builder.button(text="🗑 Да, удалить", callback_data="delete_confirmed")
+    builder.button(text="◀️ Отмена",      callback_data="my_profile")
     builder.adjust(1)
     await call.answer()
     await call.message.answer(
-        "⚠️ <b>Удалить анкету?</b>\n\nВсе данные, фото, лайки и мэтчи будут удалены безвозвратно.",
+        "⚠️ <b>Удалить анкету?</b>\n\n"
+        "<i>Все данные, фото, лайки и мэтчи будут удалены безвозвратно.</i>",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
     )
@@ -304,37 +398,42 @@ async def delete_profile(call: CallbackQuery, session: AsyncSession, state: FSMC
     await state.clear()
     await call.answer()
     await call.message.answer(
-        "🗑 Анкета удалена. Если захочешь вернуться — просто напиши /start."
+        "🗑 <b>Анкета удалена.</b>\n"
+        "└ <i>Если захочешь вернуться — напиши /start.</i>",
+        parse_mode="HTML",
     )
 
 
-# ───────────────────────────────────────────────────────────────
-# Обновить геолокацию
-# ───────────────────────────────────────────────────────────────
+# ── Геолокация ───────────────────────────────────────────────────
 
 @router.callback_query(F.data == "update_location")
 async def ask_update_location(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    await call.message.answer("📍 Поделись новой геолокацией или пропусти:", reply_markup=kb_location())
+    await call.message.answer(
+        "📍 <b>Поделись новой геолокацией</b> или пропусти:",
+        parse_mode="HTML",
+        reply_markup=kb_location(),
+    )
     await state.set_state(EditProfile.new_value)
     await state.update_data(edit_field="location")
 
 
-@router.message(F.location)
-async def receive_location_update(message: Message, state: FSMContext, session: AsyncSession):
-    data = await state.get_data()
-    if data.get("edit_field") == "location":
-        svc = ProfileService(session)
-        await svc.update_location(message.from_user.id, message.location.latitude, message.location.longitude)
-        await state.clear()
-        await message.answer("📍 Геолокация обновлена!", reply_markup=remove_kb())
-        await message.answer("Главное меню:", reply_markup=kb_main_menu())
-
-
-@router.message(F.text == "Пропустить")
-async def skip_location_update(message: Message, state: FSMContext):
-    data = await state.get_data()
-    if data.get("edit_field") == "location":
-        await state.clear()
-        await message.answer("Без изменений.", reply_markup=remove_kb())
-        await message.answer("Главное меню:", reply_markup=kb_main_menu())
+@router.message(EditProfile.new_value, F.location)
+async def save_new_location(message: Message, state: FSMContext, session: AsyncSession):
+    svc = ProfileService(session)
+    await svc.update_location(
+        message.from_user.id,
+        message.location.latitude,
+        message.location.longitude,
+    )
+    await state.clear()
+    await message.answer(
+        "✅ <b>Геолокация обновлена</b>",
+        parse_mode="HTML",
+        reply_markup=remove_kb(),
+    )
+    await message.answer(
+        "🌌 <b>Главное меню</b>",
+        parse_mode="HTML",
+        reply_markup=kb_main_menu(),
+    )
