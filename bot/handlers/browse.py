@@ -1,4 +1,7 @@
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, InputMediaPhoto
@@ -125,9 +128,14 @@ async def send_profile(
 
 async def show_next(user_id: int, bot: Bot, session: AsyncSession) -> None:
     from db.repositories.user_repo import UserRepository
-    svc       = BrowseService(session)
-    viewer    = await UserRepository(session).get(user_id)
-    candidate = await svc.next_candidate(user_id)
+    repo      = UserRepository(session)
+    viewer    = await repo.get(user_id)
+    if viewer is None:
+        await bot.send_message(user_id, "Сначала зарегистрируйся — /start")
+        return
+    candidate = await repo.get_next_candidate(
+        viewer, nearby_radius_km=50
+    )
     if candidate is None:
         await bot.send_message(
             user_id,
@@ -166,6 +174,7 @@ async def handle_like(call: CallbackQuery, bot: Bot, session: AsyncSession):
         if viewer:
             await _send_match_notification(result.partner.id, viewer, bot,
                                            write_to=call.from_user.id)
+        await show_next(call.from_user.id, bot, session)
         return
 
     if result.notify_like:
@@ -347,8 +356,8 @@ async def _send_match_notification(
                                  caption=caption, reply_markup=kb, parse_mode="HTML")
         else:
             await bot.send_message(user_id, caption, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Не удалось отправить уведомление о мэтче user_id=%s: %s", user_id, e)
 
 
 async def _notify_liked(user_id: int, bot: Bot) -> None:
@@ -361,8 +370,8 @@ async def _notify_liked(user_id: int, bot: Bot) -> None:
             parse_mode="HTML",
             reply_markup=builder.as_markup(),
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Не удалось отправить уведомление о лайке user_id=%s: %s", user_id, e)
 
 
 @router.callback_query(F.data == "noop")

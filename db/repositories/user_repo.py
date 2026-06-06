@@ -1,5 +1,6 @@
 from typing import Optional
 import math
+import random
 
 from sqlalchemy import select, update, delete, func, and_, or_, not_, exists
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -187,7 +188,6 @@ class UserRepository:
                     far.append((float("inf"), u))
 
             nearby.sort(key=lambda x: x[0])
-            import random
             random.shuffle(far)
 
             ordered = [u for _, u in nearby] + [u for _, u in far]

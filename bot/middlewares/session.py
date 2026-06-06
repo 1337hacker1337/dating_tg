@@ -18,7 +18,11 @@ class SessionMiddleware(BaseMiddleware):
     ) -> Any:
         async with AsyncSessionFactory() as session:
             data["session"] = session
-            return await handler(event, data)
+            try:
+                return await handler(event, data)
+            except Exception:
+                await session.rollback()
+                raise
 
 
 class BanCheckMiddleware(BaseMiddleware):
@@ -43,7 +47,10 @@ class BanCheckMiddleware(BaseMiddleware):
 
         if db_user and db_user.is_banned:
             # Отвечаем и прерываем цепочку
-            if hasattr(event, "answer"):
+            from aiogram.types import Message, CallbackQuery
+            if isinstance(event, CallbackQuery):
+                await event.answer("🚫 Ваш аккаунт заблокирован.", show_alert=True)
+            elif isinstance(event, Message):
                 await event.answer("🚫 Ваш аккаунт заблокирован.")
             elif hasattr(event, "message") and event.message:
                 await event.message.answer("🚫 Ваш аккаунт заблокирован.")
