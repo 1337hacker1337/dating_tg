@@ -31,11 +31,11 @@ async def _profile_text(user: User, session) -> str:
         select(func.count()).where(Like.to_user == user.id, Like.value.is_(False))
     )
 
-    status = "✅ активна" if user.is_active else "🙈 скрыта"
-    geo    = "🗺️ указана" if user.latitude is not None else "🗺️ не указана"
+    status = "активна" if user.is_active else "скрыта"
+    geo    = "📡 указана" if user.latitude is not None else "📡 не указана"
 
     lines = [
-        f"🕯️ <b>{user.name}</b>, <code>{user.age}</code>",
+        f"<b>{user.name}</b>, {user.age}",
         f"├ {GENDER_MAP.get(user.gender.value, '—')} · ищу: {LF_MAP.get(user.looking_for.value, '—')}",
         f"├ Анкета: <i>{status}</i> · {geo}",
     ]
@@ -44,7 +44,7 @@ async def _profile_text(user: User, session) -> str:
 
     lines.append(format_rating_line(user.avg_rating, user.rating_count))
     lines.append(
-        f"\n📊 <b>Стата</b>\n"
+        f"\n<b>стата</b>\n"
         f"├ 🩸 Лайков: <code>{likes_in.scalar()}</code>\n"
         f"├ ⚰️ Дизлайков: <code>{dislikes_in.scalar()}</code>\n"
         f"└ ⚔️ Мэтчей: <code>{matches_count.scalar()}</code>"
@@ -69,7 +69,7 @@ async def _safe_answer(call: CallbackQuery, text: str, **kwargs):
 async def show_menu(call: CallbackQuery):
     await call.answer()
     await call.message.answer(
-        "🌌 <b>Грибница.</b>\n└ <i>Выбери действие в меню ниже.</i>",
+        "Выбери действие.",
         parse_mode="HTML",
         reply_markup=kb_main_menu(),
     )
@@ -94,7 +94,7 @@ async def _send_profile(user_id: int, msg, session: AsyncSession):
     repo = UserRepository(session)
     user = await repo.get(user_id)
     if user is None:
-        await msg.answer("⚠️ Сначала создай анкету — /start")
+        await msg.answer("Сначала создай анкету — /start")
         return
     text = await _profile_text(user, session)
     if user.photos:
@@ -120,13 +120,13 @@ async def edit_profile_menu(call: CallbackQuery):
     builder.button(text="⚧ Пол",        callback_data="edit:gender")
     builder.button(text="🔍 Кого ищу",  callback_data="edit:looking_for")
     builder.button(text="💬 О себе",     callback_data="edit:bio")
-    builder.button(text="🗺️ Геолокация", callback_data="update_location")
+    builder.button(text="📡 Геолокация", callback_data="update_location")
     builder.button(text="🖼 Фото",       callback_data="edit:photos")
     builder.button(text="◀️ Назад",      callback_data="my_profile")
     builder.adjust(2)
     await call.answer()
     await call.message.answer(
-        "✏️ <b>Что хочешь изменить?</b>",
+        "Что изменить?",
         parse_mode="HTML",
         reply_markup=builder.as_markup(),
     )
@@ -200,7 +200,7 @@ async def set_gender(call: CallbackQuery, session: AsyncSession):
         update(User).where(User.id == call.from_user.id).values(gender=GenderEnum(val))
     )
     await session.commit()
-    await call.answer(f"✅ Пол изменён на «{GENDER_MAP[val]}»", show_alert=True)
+    await call.answer(f"Пол изменён.", show_alert=True)
     await call.message.answer(
         "🌌 <b>Главное меню</b>",
         parse_mode="HTML",
@@ -215,7 +215,7 @@ async def set_looking_for(call: CallbackQuery, session: AsyncSession):
         update(User).where(User.id == call.from_user.id).values(looking_for=LookingForEnum(val))
     )
     await session.commit()
-    await call.answer(f"✅ Теперь ищешь: {LF_MAP[val]}", show_alert=True)
+    await call.answer(f"Сохранено.", show_alert=True)
     await call.message.answer(
         "🌌 <b>Главное меню</b>",
         parse_mode="HTML",
@@ -232,14 +232,14 @@ async def apply_edit_value(message: Message, state: FSMContext, session: AsyncSe
         val = (message.text or "").strip()
         if not val or len(val) > 64:
             await message.answer(
-                "⚠️ <b>Нарушение ритуала</b>\n└ <i>Имя от 1 до 64 символов:</i>",
+                "⚠️  Имя от 1 до 64 символов.",
                 parse_mode="HTML",
             )
             return
         await session.execute(update(User).where(User.id == message.from_user.id).values(name=val))
         await session.commit()
         await message.answer(
-            f"🕯️ <b>Имя изменено на «{val}»</b>",
+            f"Имя изменено на «{val}».",
             parse_mode="HTML",
             reply_markup=kb_main_menu(),
         )
@@ -248,14 +248,14 @@ async def apply_edit_value(message: Message, state: FSMContext, session: AsyncSe
         txt = (message.text or "").strip()
         if not txt.isdigit() or not (1 <= int(txt) <= 99):
             await message.answer(
-                "⚠️ <b>Нарушение ритуала</b>\n└ <i>Возраст от 1 до 99:</i>",
+                "⚠️  Возраст от 1 до 99.",
                 parse_mode="HTML",
             )
             return
         await session.execute(update(User).where(User.id == message.from_user.id).values(age=int(txt)))
         await session.commit()
         await message.answer(
-            f"✅ <b>Возраст изменён на {txt}</b>",
+            f"Возраст изменён.",
             parse_mode="HTML",
             reply_markup=kb_main_menu(),
         )
@@ -264,7 +264,7 @@ async def apply_edit_value(message: Message, state: FSMContext, session: AsyncSe
         val = (message.text or "").strip()
         if len(val) > 500:
             await message.answer(
-                "⚠️ <b>Слишком длинно</b>\n└ <i>Не более 500 символов:</i>",
+                "⚠️  Не более 500 символов.",
                 parse_mode="HTML",
             )
             return
@@ -292,7 +292,7 @@ async def collect_edit_photo(message: Message, state: FSMContext, session: Async
     await session.commit()
     await state.clear()
     await message.answer(
-        "🕯️ <b>Фото обновлено.</b>",
+        "Фото обновлено.",
         parse_mode="HTML",
         reply_markup=kb_main_menu(),
     )
@@ -307,7 +307,7 @@ async def hide_profile(call: CallbackQuery, session: AsyncSession):
     if user and user.is_active:
         await repo.set_active(call.from_user.id, False)
         await session.commit()
-        await call.answer("🙈 Анкета скрыта — ты вне системы.", show_alert=True)
+        await call.answer("Анкета скрыта.", show_alert=True)
     else:
         await call.answer("Анкета уже скрыта.")
 
@@ -319,7 +319,7 @@ async def show_profile_handler(call: CallbackQuery, session: AsyncSession):
     if user and not user.is_active:
         await repo.set_active(call.from_user.id, True)
         await session.commit()
-        await call.answer("👁 Анкета активирована — ты в системе.", show_alert=True)
+        await call.answer("Анкета активирована.", show_alert=True)
     else:
         await call.answer("Анкета уже активна.")
 
@@ -332,8 +332,7 @@ async def confirm_delete(call: CallbackQuery):
     builder.adjust(1)
     await call.answer()
     await call.message.answer(
-        "⚰️ <b>Удалить анкету?</b>\n\n"
-        "<i>Все данные, фото, лайки и мэтчи будут уничтожены. Это необратимо.</i>",
+        "Удалить анкету?\n\n<i>Все данные будут уничтожены. Это необратимо.</i>",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
     )
@@ -347,8 +346,7 @@ async def delete_profile(call: CallbackQuery, session: AsyncSession, state: FSMC
     await state.clear()
     await call.answer()
     await call.message.answer(
-        "⚰️ <b>Анкета уничтожена.</b>\n"
-        "└ <i>Если захочешь вернуться — /start.</i>",
+        "Анкета удалена. Если захочешь вернуться — /start.",
         parse_mode="HTML",
     )
 
@@ -363,7 +361,7 @@ async def ask_update_location(call: CallbackQuery, state: FSMContext):
 
 async def _ask_location_prompt(message: Message, state: FSMContext):
     await message.answer(
-        "🗺️ <b>Обнови геолокацию</b> — или пропусти:",
+        "📡  Геолокация\n<i>Поделись или пропусти.</i>",
         parse_mode="HTML",
         reply_markup=kb_location(),
     )
@@ -381,7 +379,7 @@ async def save_new_location(message: Message, state: FSMContext, session: AsyncS
     )
     await state.clear()
     await message.answer(
-        "🗺️ <b>Геолокация обновлена.</b>",
+        "📡  Геолокация обновлена.",
         parse_mode="HTML",
         reply_markup=remove_kb(),
     )

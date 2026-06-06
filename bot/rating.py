@@ -43,9 +43,9 @@ def format_rating_line(avg_rating: float, rating_count: int) -> str:
     После:         📊 [██████░░] 78% 🔮 htn
     """
     if rating_count < MIN_VOTES:
-        return f"🧬 <i>Калибровка · {rating_count}/{MIN_VOTES}</i>"
+        return f"🧬  калибровка  {rating_count}/{MIN_VOTES}"
 
     pct  = round(avg_rating * 100)
     tier = get_tier(avg_rating)
     bar  = rating_bar(avg_rating)
-    return f"📊 <code>{bar}</code> <b>{pct}%</b> {tier.emoji} <b>{tier.slug}</b>"
+    return f"<code>{bar}</code>  {pct}%  {tier.emoji} {tier.slug}"

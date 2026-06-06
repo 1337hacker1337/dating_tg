@@ -3,7 +3,7 @@ from typing import Optional
 
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, DateTime, Enum,
-    Float, ForeignKey, Integer, SmallInteger, String, Text,
+    Float, ForeignKey, Index, Integer, SmallInteger, String, Text,
     UniqueConstraint, func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -62,6 +62,11 @@ class User(Base):
 
     __table_args__ = (
         CheckConstraint("age >= 1 AND age <= 99", name="ck_users_age"),
+        # Индексы для быстрого подбора анкет
+        Index("ix_users_active_banned", "is_active", "is_banned"),
+        Index("ix_users_gender", "gender"),
+        Index("ix_users_looking_for", "looking_for"),
+        Index("ix_users_coords", "latitude", "longitude"),
     )
 
 
@@ -88,6 +93,8 @@ class Like(Base):
 
     __table_args__ = (
         UniqueConstraint("from_user", "to_user", name="uq_likes_pair"),
+        Index("ix_likes_from_user", "from_user"),
+        Index("ix_likes_to_user", "to_user"),
     )
 
 

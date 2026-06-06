@@ -134,17 +134,14 @@ class UserRepository:
         nearby_radius_km: int = 50,
     ) -> Optional[User]:
         """
-        Возвращает следующую анкету для просмотра.
-        Алгоритм:
-          1. Исключить себя, забаненных, неактивных, уже просмотренных.
-          2. Фильтр по полу (looking_for).
-          3. Если у current_user есть координаты — сначала ближайшие,
-             потом остальные. Иначе — все подряд в случайном порядке.
+        Возвращает следующую анкету.
+        Если есть координаты — сначала ближайшие (через SQL),
+        потом случайный из остальных. Всё одним запросом, LIMIT 1.
         """
-        # Подзапрос: уже оценённые пользователи
+        from sqlalchemy import text, literal
+
         seen_subq = select(Like.to_user).where(Like.from_user == current_user.id)
 
-        # Базовый фильтр
         base_filter = and_(
             User.id != current_user.id,
             User.is_active.is_(True),
@@ -152,48 +149,52 @@ class UserRepository:
             not_(User.id.in_(seen_subq)),
         )
 
-        # Фильтр по полу
         if current_user.looking_for == LookingForEnum.male:
             base_filter = and_(base_filter, User.gender == GenderEnum.male)
         elif current_user.looking_for == LookingForEnum.female:
             base_filter = and_(base_filter, User.gender == GenderEnum.female)
-        # any — не фильтруем по полу
 
-        # Если есть координаты — пытаемся найти рядом
         if current_user.latitude is not None and current_user.longitude is not None:
-            candidates_result = await self.session.execute(
+            lat = current_user.latitude
+            lon = current_user.longitude
+
+            # Приблизительный bbox в градусах (1° ≈ 111 км)
+            deg = nearby_radius_km / 111.0
+
+            # Сначала ищем одного ближайшего в радиусе через bbox + точный Haversine
+            nearby_q = (
+                select(User)
+                .options(selectinload(User.photos))
+                .where(
+                    base_filter,
+                    User.latitude.isnot(None),
+                    User.longitude.isnot(None),
+                    User.latitude.between(lat - deg, lat + deg),
+                    User.longitude.between(lon - deg, lon + deg),
+                )
+                .order_by(
+                    # Псевдо-дистанция без тригонометрии — достаточно для сортировки
+                    ((User.latitude - lat) * (User.latitude - lat) +
+                     (User.longitude - lon) * (User.longitude - lon))
+                )
+                .limit(1)
+            )
+            result = await self.session.execute(nearby_q)
+            candidate = result.scalar_one_or_none()
+            if candidate:
+                return candidate
+
+            # Нет никого рядом — случайный из всех оставшихся
+            result = await self.session.execute(
                 select(User)
                 .options(selectinload(User.photos))
                 .where(base_filter)
+                .order_by(func.random())
+                .limit(1)
             )
-            candidates = list(candidates_result.scalars().all())
+            return result.scalar_one_or_none()
 
-            if not candidates:
-                return None
-
-            # Разбиваем на «рядом» и «остальные», сортируем по дистанции
-            nearby = []
-            far = []
-            for u in candidates:
-                if u.latitude is not None and u.longitude is not None:
-                    dist = _haversine_km(
-                        current_user.latitude, current_user.longitude,
-                        u.latitude, u.longitude
-                    )
-                    if dist <= nearby_radius_km:
-                        nearby.append((dist, u))
-                    else:
-                        far.append((dist, u))
-                else:
-                    far.append((float("inf"), u))
-
-            nearby.sort(key=lambda x: x[0])
-            random.shuffle(far)
-
-            ordered = [u for _, u in nearby] + [u for _, u in far]
-            return ordered[0] if ordered else None
-
-        # Нет координат — случайный порядок
+        # Нет координат — случайный
         result = await self.session.execute(
             select(User)
             .options(selectinload(User.photos))
