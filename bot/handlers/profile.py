@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import User, GenderEnum, LookingForEnum, Like, Match
 from bot.keyboards import kb_main_menu, kb_profile_actions, kb_match, kb_location, remove_kb
 from bot.services import ProfileService, BrowseService
+from bot.rating import format_rating_line
 from bot.states import EditProfile
 from db.repositories.user_repo import UserRepository
 
@@ -15,32 +16,6 @@ router = Router()
 
 GENDER_MAP = {"male": "Мужской", "female": "Женский", "other": "Другой"}
 LF_MAP     = {"male": "Парней",  "female": "Девушек", "any": "Всех"}
-
-# ── Ранги ────────────────────────────────────────────────────────
-_TIERS = [
-    (3.0,  "sub3",     "🚫"),
-    (5.0,  "sub5",     "📉"),
-    (6.0,  "ltn",      "👤"),
-    (7.0,  "mtn",      "📊"),
-    (7.10, "htn",      "🌟"),
-    (8.5,  "chadlite", "⚡"),
-]
-_CHAD = ("chad", "👑")
-
-
-def get_tier(avg: float) -> tuple[str, str]:
-    for threshold, slug, emoji in _TIERS:
-        if avg < threshold:
-            return slug, emoji
-    return _CHAD
-
-
-def tier_line(avg: float, count: int) -> str:
-    if count == 0:
-        return "🏷 <i>Ранг ещё не определён</i>"
-    slug, emoji = get_tier(avg)
-    return f"🏆 Ранг: <b>{emoji} {slug}</b>  <code>({avg:.1f}/10 · {count} голосов)</code>"
-
 
 # ── Текст профиля ────────────────────────────────────────────────
 async def _profile_text(user: User, session) -> str:
@@ -71,7 +46,7 @@ async def _profile_text(user: User, session) -> str:
     lines.append(
         f"├─ Анкета: {'✅ <i>Активна</i>' if user.is_active else '🙈 <i>Скрыта</i>'}"
     )
-    lines.append(tier_line(user.avg_rating, user.rating_count))
+    lines.append(format_rating_line(user.avg_rating, user.rating_count))
     lines.append(
         f"\n📊 <b>Статистика</b>\n"
         f"├─ ❤️ Лайков: <code>{likes_in.scalar()}</code>\n"

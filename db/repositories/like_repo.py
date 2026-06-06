@@ -11,7 +11,7 @@ class LikeRepository:
         self.session = session
 
     async def add(self, from_user: int, to_user: int, value: bool) -> None:
-        """INSERT или UPDATE если запись уже есть (повторный лайк/дизлайк)."""
+        """INSERT или UPDATE если запись уже есть."""
         stmt = (
             insert(Like)
             .values(from_user=from_user, to_user=to_user, value=value)
@@ -21,9 +21,31 @@ class LikeRepository:
             )
         )
         await self.session.execute(stmt)
+        # Пересчитываем рейтинг как ratio лайков
+        await self._recalc_rating(to_user)
+
+    async def _recalc_rating(self, user_id: int) -> None:
+        """
+        avg_rating = likes / (likes + dislikes)  [0.0 .. 1.0]
+        rating_count = likes + dislikes
+        """
+        q = select(
+            func.count().filter(Like.value.is_(True)).label("likes"),
+            func.count().label("total"),
+        ).where(Like.to_user == user_id)
+        row = (await self.session.execute(q)).one()
+
+        likes: int = row.likes or 0
+        total: int = row.total or 0
+        ratio = (likes / total) if total > 0 else 0.0
+
+        await self.session.execute(
+            update(User)
+            .where(User.id == user_id)
+            .values(avg_rating=ratio, rating_count=total)
+        )
 
     async def already_liked(self, from_user: int, to_user: int) -> bool:
-        """Проверяет, уже лайкнул ли from_user пользователя to_user."""
         result = await self.session.execute(
             select(exists().where(
                 and_(
@@ -36,7 +58,6 @@ class LikeRepository:
         return result.scalar()
 
     async def has_mutual_like(self, user_a: int, user_b: int) -> bool:
-        """Проверяет, лайкнул ли user_b пользователя user_a."""
         result = await self.session.execute(
             select(exists().where(
                 and_(
