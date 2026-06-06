@@ -21,3 +21,7 @@ class AdminBroadcast(StatesGroup):
 class AdminCalibration(StatesGroup):
     waiting_id = State()        # ждём telegram_id
     waiting_votes = State()     # ждём новое значение rating_count
+
+
+class AdminAddAdmin(StatesGroup):
+    waiting_id = State()        # ждём telegram_id нового администратора
