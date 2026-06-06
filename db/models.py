@@ -40,7 +40,6 @@ class User(Base):
     latitude:     Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     longitude:    Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
-    # Ранговая система — пересчитываются при каждом новом голосе
     avg_rating:   Mapped[float] = mapped_column(Float,   default=0.0, nullable=False, server_default="0")
     rating_count: Mapped[int]   = mapped_column(Integer, default=0,   nullable=False, server_default="0")
 
@@ -62,7 +61,6 @@ class User(Base):
 
     __table_args__ = (
         CheckConstraint("age >= 1 AND age <= 99", name="ck_users_age"),
-        # Индексы для быстрого подбора анкет
         Index("ix_users_active_banned", "is_active", "is_banned"),
         Index("ix_users_gender", "gender"),
         Index("ix_users_looking_for", "looking_for"),

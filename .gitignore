@@ -1,29 +1,20 @@
-# Секреты, токены и настройки окружения
 .env
 config.env
 secrets.json
-
-# Кэш Python (мусор, генерируемый при запусках бота)
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .pytest_cache/
 .mypy_cache/
-
-# Локальная база данных и дампы
 *.sql
 *.dump
 *.db
 *.sqlite3
 logs/
 *.log
-
-# Папка виртуального окружения
 venv/
 .venv/
 env/
 ENV/
-
-# Мусорные файлы от утилит
 repopack-output.txt

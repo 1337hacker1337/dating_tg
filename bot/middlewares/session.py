@@ -1,13 +1,13 @@
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject, Update
+from aiogram.types import TelegramObject, Message, CallbackQuery
 
 from db.session import AsyncSessionFactory
+from db.repositories.user_repo import UserRepository
 from bot import logger as log
 
 _log = log.get(__name__)
-from db.repositories.user_repo import UserRepository
 
 
 class SessionMiddleware(BaseMiddleware):
@@ -29,7 +29,13 @@ class SessionMiddleware(BaseMiddleware):
 
 
 class BanCheckMiddleware(BaseMiddleware):
-    """Блокирует забаненных пользователей."""
+    """
+    Блокирует забаненных пользователей.
+
+    Оптимизация: используем get_light() — без selectinload фото,
+    так как здесь нужны только is_banned / is_active / id.
+    db_user кладём в data, чтобы хэндлеры не делали повторный SELECT.
+    """
 
     async def __call__(
         self,
@@ -45,12 +51,10 @@ class BanCheckMiddleware(BaseMiddleware):
         if session is None:
             return await handler(event, data)
 
-        repo = UserRepository(session)
-        db_user = await repo.get(user.id)
+        repo    = UserRepository(session)
+        db_user = await repo.get_light(user.id)   # ← без фото, быстрее
 
         if db_user and db_user.is_banned:
-            # Отвечаем и прерываем цепочку
-            from aiogram.types import Message, CallbackQuery
             if isinstance(event, CallbackQuery):
                 await event.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.", show_alert=True)
             elif isinstance(event, Message):
@@ -58,10 +62,10 @@ class BanCheckMiddleware(BaseMiddleware):
             elif hasattr(event, "message") and event.message:
                 await event.message.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.")
             _log.warning("banned user blocked: user=%s", user.id)
-            return  # не вызываем handler
+            return
 
-        # Обновляем last_seen для зарегистрированных
         if db_user:
+            # fire-and-forget через отдельный UPDATE — не блокируем основной поток
             await repo.update_last_seen(user.id)
             await session.commit()
 

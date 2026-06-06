@@ -1,3 +1,4 @@
+from typing import Optional
 from sqlalchemy import select, func, exists, and_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,6 @@ class LikeRepository:
         self.session = session
 
     async def add(self, from_user: int, to_user: int, value: bool) -> None:
-        """INSERT или UPDATE если запись уже есть."""
         stmt = (
             insert(Like)
             .values(from_user=from_user, to_user=to_user, value=value)
@@ -21,14 +21,10 @@ class LikeRepository:
             )
         )
         await self.session.execute(stmt)
-        # Пересчитываем рейтинг как ratio лайков
         await self._recalc_rating(to_user)
 
     async def _recalc_rating(self, user_id: int) -> None:
-        """
-        avg_rating = likes / (likes + dislikes)  [0.0 .. 1.0]
-        rating_count = likes + dislikes
-        """
+        """avg_rating = likes / total, rating_count = total — один запрос."""
         q = select(
             func.count().filter(Like.value.is_(True)).label("likes"),
             func.count().label("total"),
@@ -40,19 +36,13 @@ class LikeRepository:
         ratio = (likes / total) if total > 0 else 0.0
 
         await self.session.execute(
-            update(User)
-            .where(User.id == user_id)
-            .values(avg_rating=ratio, rating_count=total)
+            update(User).where(User.id == user_id).values(avg_rating=ratio, rating_count=total)
         )
 
     async def already_liked(self, from_user: int, to_user: int) -> bool:
         result = await self.session.execute(
             select(exists().where(
-                and_(
-                    Like.from_user == from_user,
-                    Like.to_user == to_user,
-                    Like.value.is_(True),
-                )
+                and_(Like.from_user == from_user, Like.to_user == to_user, Like.value.is_(True))
             ))
         )
         return result.scalar()
@@ -60,20 +50,43 @@ class LikeRepository:
     async def has_mutual_like(self, user_a: int, user_b: int) -> bool:
         result = await self.session.execute(
             select(exists().where(
-                and_(
-                    Like.from_user == user_b,
-                    Like.to_user == user_a,
-                    Like.value.is_(True),
-                )
+                and_(Like.from_user == user_b, Like.to_user == user_a, Like.value.is_(True))
             ))
         )
         return result.scalar()
+
+    async def count_unanswered_likers(self, user_id: int) -> int:
+        """Количество лайков без ответа — для бейджа."""
+        liked_me  = select(Like.from_user).where(Like.to_user == user_id, Like.value.is_(True))
+        i_reacted = select(Like.to_user).where(Like.from_user == user_id)
+        r = await self.session.execute(
+            select(func.count()).select_from(
+                liked_me.where(Like.from_user.not_in(i_reacted)).subquery()
+            )
+        )
+        return r.scalar() or 0
+
+    async def get_unanswered_liker_at(self, user_id: int, offset: int) -> Optional[int]:
+        """Один liker_id по смещению — без загрузки всего списка в память."""
+        liked_me  = select(Like.from_user).where(Like.to_user == user_id, Like.value.is_(True))
+        i_reacted = select(Like.to_user).where(Like.from_user == user_id)
+        q = (
+            liked_me
+            .where(Like.from_user.not_in(i_reacted))
+            .order_by(Like.created_at)
+            .offset(offset)
+            .limit(1)
+        )
+        r = await self.session.execute(q)
+        row = r.fetchone()
+        return row[0] if row else None
 
     async def count_total(self) -> int:
         r = await self.session.execute(
             select(func.count()).select_from(Like).where(Like.value.is_(True))
         )
         return r.scalar()
+
 
 
 class MatchRepository:
@@ -90,9 +103,7 @@ class MatchRepository:
     async def exists(self, user_a: int, user_b: int) -> bool:
         u1, u2 = sorted([user_a, user_b])
         result = await self.session.execute(
-            select(exists().where(
-                and_(Match.user1_id == u1, Match.user2_id == u2)
-            ))
+            select(exists().where(and_(Match.user1_id == u1, Match.user2_id == u2)))
         )
         return result.scalar()
 
@@ -103,9 +114,7 @@ class MatchRepository:
             .where(
                 User.id.in_(
                     select(Match.user2_id).where(Match.user1_id == user_id)
-                    .union(
-                        select(Match.user1_id).where(Match.user2_id == user_id)
-                    )
+                    .union(select(Match.user1_id).where(Match.user2_id == user_id))
                 )
             )
             .order_by(User.name)

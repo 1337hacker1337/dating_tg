@@ -1,7 +1,6 @@
 import os
 
 OUTPUT_FILE = "repopack-output.txt"
-# Игнорируем мусор, чтобы не забить лимит Клода
 EXCLUDE_DIRS = {'.venv', 'venv', '__pycache__', '.git', '.idea', '.vscode'}
 ALLOWED_EXTENSIONS = {'.py', '.json', '.sql', '.md', '.html'}
 
@@ -20,4 +19,4 @@ with open(OUTPUT_FILE, 'w', encoding='utf-8') as outfile:
                 except Exception:
                     pass
 
-print(f" Готово! Все упаковано в файл: {OUTPUT_FILE}")
+print(f"Готово! Всё упаковано в файл: {OUTPUT_FILE}")

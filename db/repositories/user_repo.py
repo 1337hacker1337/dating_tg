@@ -1,23 +1,10 @@
 from typing import Optional
-import math
-import random
 
-from sqlalchemy import select, update, delete, func, and_, or_, not_, exists
+from sqlalchemy import select, update, delete, func, and_, or_, not_, exists, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.models import User, Photo, Like, Match, GenderEnum, LookingForEnum
-
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Расстояние в км между двумя точками (Haversine)."""
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(
-        math.radians(lat2)
-    ) * math.sin(dlon / 2) ** 2
-    return R * 2 * math.asin(math.sqrt(a))
 
 
 class UserRepository:
@@ -31,6 +18,13 @@ class UserRepository:
     async def get(self, user_id: int) -> Optional[User]:
         result = await self.session.execute(
             select(User).where(User.id == user_id).options(selectinload(User.photos))
+        )
+        return result.scalar_one_or_none()
+
+    async def get_light(self, user_id: int) -> Optional[User]:
+        """Без фото — для ban-check и last_seen (экономия на selectinload)."""
+        result = await self.session.execute(
+            select(User).where(User.id == user_id)
         )
         return result.scalar_one_or_none()
 
@@ -67,20 +61,14 @@ class UserRepository:
         await self.session.flush()
         return user
 
-    async def update_location(
-        self, user_id: int, latitude: float, longitude: float
-    ) -> None:
+    async def update_location(self, user_id: int, latitude: float, longitude: float) -> None:
         await self.session.execute(
-            update(User)
-            .where(User.id == user_id)
-            .values(latitude=latitude, longitude=longitude)
+            update(User).where(User.id == user_id).values(latitude=latitude, longitude=longitude)
         )
 
     async def update_last_seen(self, user_id: int) -> None:
         await self.session.execute(
-            update(User)
-            .where(User.id == user_id)
-            .values(last_seen_at=func.now())
+            update(User).where(User.id == user_id).values(last_seen_at=func.now())
         )
 
     async def set_active(self, user_id: int, active: bool) -> None:
@@ -100,14 +88,6 @@ class UserRepository:
     # Фото
     # ------------------------------------------------------------------
 
-    async def get_photos(self, user_id: int) -> list[Photo]:
-        result = await self.session.execute(
-            select(Photo)
-            .where(Photo.user_id == user_id)
-            .order_by(Photo.position)
-        )
-        return list(result.scalars().all())
-
     async def count_photos(self, user_id: int) -> int:
         result = await self.session.execute(
             select(func.count()).where(Photo.user_id == user_id)
@@ -125,7 +105,34 @@ class UserRepository:
         await self.session.execute(delete(Photo).where(Photo.user_id == user_id))
 
     # ------------------------------------------------------------------
-    # Подбор анкет
+    # Статистика профиля — ОДИН запрос вместо трёх
+    # ------------------------------------------------------------------
+
+    async def get_profile_stats(self, user_id: int) -> dict:
+        """
+        Возвращает {'likes': int, 'dislikes': int, 'matches': int} одним запросом.
+        """
+        likes_q = (
+            select(
+                func.count().filter(Like.value.is_(True)).label("likes"),
+                func.count().filter(Like.value.is_(False)).label("dislikes"),
+            ).where(Like.to_user == user_id)
+        )
+        matches_q = (
+            select(func.count().label("matches"))
+            .select_from(Match)
+            .where((Match.user1_id == user_id) | (Match.user2_id == user_id))
+        )
+        row_l = (await self.session.execute(likes_q)).one()
+        row_m = (await self.session.execute(matches_q)).one()
+        return {
+            "likes":   row_l.likes   or 0,
+            "dislikes": row_l.dislikes or 0,
+            "matches":  row_m.matches  or 0,
+        }
+
+    # ------------------------------------------------------------------
+    # Подбор анкет — оптимизированный
     # ------------------------------------------------------------------
 
     async def get_next_candidate(
@@ -134,12 +141,10 @@ class UserRepository:
         nearby_radius_km: int = 50,
     ) -> Optional[User]:
         """
-        Возвращает следующую анкету.
-        Если есть координаты — сначала ближайшие (через SQL),
-        потом случайный из остальных. Всё одним запросом, LIMIT 1.
+        Один SQL-запрос с приоритетом ближайших через CASE-сортировку.
+        Если у зрителя есть координаты — ближние идут первыми (приоритет 0),
+        остальные — вторыми (приоритет 1), внутри каждой группы random().
         """
-        from sqlalchemy import text, literal
-
         seen_subq = select(Like.to_user).where(Like.from_user == current_user.id)
 
         base_filter = and_(
@@ -157,51 +162,39 @@ class UserRepository:
         if current_user.latitude is not None and current_user.longitude is not None:
             lat = current_user.latitude
             lon = current_user.longitude
-
-            # Приблизительный bbox в градусах (1° ≈ 111 км)
             deg = nearby_radius_km / 111.0
 
-            # Сначала ищем одного ближайшего в радиусе через bbox + точный Haversine
-            nearby_q = (
+            in_bbox = and_(
+                User.latitude.isnot(None),
+                User.longitude.isnot(None),
+                User.latitude.between(lat - deg, lat + deg),
+                User.longitude.between(lon - deg, lon + deg),
+            )
+
+            # CASE: 0 = рядом, 1 = далеко — один запрос, правильный приоритет
+            priority = case((in_bbox, 0), else_=1)
+            dist_sq  = (
+                (User.latitude - lat) * (User.latitude - lat) +
+                (User.longitude - lon) * (User.longitude - lon)
+            )
+
+            q = (
                 select(User)
                 .options(selectinload(User.photos))
-                .where(
-                    base_filter,
-                    User.latitude.isnot(None),
-                    User.longitude.isnot(None),
-                    User.latitude.between(lat - deg, lat + deg),
-                    User.longitude.between(lon - deg, lon + deg),
-                )
-                .order_by(
-                    # Псевдо-дистанция без тригонометрии — достаточно для сортировки
-                    ((User.latitude - lat) * (User.latitude - lat) +
-                     (User.longitude - lon) * (User.longitude - lon))
-                )
+                .where(base_filter)
+                .order_by(priority, dist_sq)
                 .limit(1)
             )
-            result = await self.session.execute(nearby_q)
-            candidate = result.scalar_one_or_none()
-            if candidate:
-                return candidate
-
-            # Нет никого рядом — случайный из всех оставшихся
-            result = await self.session.execute(
+        else:
+            q = (
                 select(User)
                 .options(selectinload(User.photos))
                 .where(base_filter)
                 .order_by(func.random())
                 .limit(1)
             )
-            return result.scalar_one_or_none()
 
-        # Нет координат — случайный
-        result = await self.session.execute(
-            select(User)
-            .options(selectinload(User.photos))
-            .where(base_filter)
-            .order_by(func.random())
-            .limit(1)
-        )
+        result = await self.session.execute(q)
         return result.scalar_one_or_none()
 
     # ------------------------------------------------------------------
@@ -233,9 +226,7 @@ class UserRepository:
     ) -> list[User]:
         q = select(User).options(selectinload(User.photos))
         if search:
-            q = q.where(
-                or_(User.name.ilike(f"%{search}%"), User.username.ilike(f"%{search}%"))
-            )
+            q = q.where(or_(User.name.ilike(f"%{search}%"), User.username.ilike(f"%{search}%")))
         if banned is not None:
             q = q.where(User.is_banned == banned)
         q = q.order_by(User.registered_at.desc()).offset(offset).limit(limit)

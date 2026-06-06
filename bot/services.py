@@ -113,19 +113,12 @@ class BrowseService:
         return await self.matches.list_for_user(user_id)
 
 
-# ── НОВОЕ ────────────────────────────────────────────────────────
 class RatingService:
-    """Сохраняет голос и пересчитывает ранг пользователя на лету."""
-
     def __init__(self, session: AsyncSession):
         self.session = session
         self.repo    = RatingRepository(session)
 
     async def vote(self, voter_id: int, target_id: int, score: int) -> float:
-        """
-        Записывает оценку, пересчитывает avg_rating в users,
-        возвращает новое avg_rating.
-        """
         await self.repo.upsert(voter_id, target_id, score)
         await self.session.commit()
         return await self.repo.get_avg(target_id)

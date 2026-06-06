@@ -2,7 +2,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from config import settings
 
-# asyncpg требует postgresql+asyncpg://
 _dsn = settings.db_dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 engine = create_async_engine(_dsn, echo=False, pool_size=10, max_overflow=5)

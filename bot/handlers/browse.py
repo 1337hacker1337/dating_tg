@@ -1,24 +1,38 @@
+"""
+bot/handlers/browse.py
+──────────────────────
+Горячий путь: лента / лайк / дизлайк / просмотр лайков / мэтчи.
+
+Ключевые оптимизации:
+  • show_next() принимает viewer (уже загруженный User) — не делает повторный SELECT
+  • _show_likes_page() использует get_unanswered_liker_at(offset) — один SELECT вместо
+    загрузки всего списка liker_ids в память
+  • _profile_caption() — чистая функция, никаких запросов
+"""
 import math
 import logging
 
 import bot.logger as _logmod
+
 logger = logging.getLogger(__name__)
-_log = _logmod.get(__name__)
+_log   = _logmod.get(__name__)
 
 from aiogram import Router, F, Bot
-from aiogram.types import CallbackQuery, Message, InputMediaPhoto
+from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.keyboards import kb_main_menu, kb_match, kb_swipe
 from bot.rating import format_rating_line
 from bot.services import BrowseService
-from db.models import User, Like
+from db.models import User
 from db.repositories.user_repo import UserRepository
+from db.repositories.like_repo import LikeRepository
 
 router = Router()
 
+
+# ── Вспомогательные ──────────────────────────────────────────────
 
 def _haversine_km(lat1, lon1, lat2, lon2) -> float:
     R = 6371.0
@@ -31,48 +45,34 @@ def _haversine_km(lat1, lon1, lat2, lon2) -> float:
 
 
 def _profile_caption(candidate: User, viewer: User | None = None) -> str:
-    parts = [f"<b>{candidate.name}</b>, {candidate.age}"]
+    header = f"<b>{candidate.name}</b>, {candidate.age}"
 
     if (
         viewer
-        and viewer.latitude is not None and viewer.longitude is not None
+        and viewer.latitude  is not None and viewer.longitude  is not None
         and candidate.latitude is not None and candidate.longitude is not None
     ):
         dist = round(_haversine_km(
             viewer.latitude, viewer.longitude,
             candidate.latitude, candidate.longitude,
         ), 1)
-        parts[0] += f"  ·  📡 {dist} км"
+        header += f"  ·  📡 {dist} км"
 
-    lines = [parts[0]]
-    lines.append(format_rating_line(candidate.avg_rating, candidate.rating_count))
-
+    lines = [header, format_rating_line(candidate.avg_rating, candidate.rating_count)]
     if candidate.bio:
         lines.append(f"\n<i>{candidate.bio}</i>")
-
     return "\n".join(lines)
 
 
-async def _send_card(
-    user_id: int,
-    bot: Bot,
-    candidate: User,
-    viewer: User | None = None,
-) -> None:
+async def _send_card(user_id: int, bot: Bot, candidate: User, viewer: User | None = None) -> None:
     caption = _profile_caption(candidate, viewer)
     kb      = kb_swipe(candidate.id)
-
-    if not candidate.photos:
-        await bot.send_message(
-            user_id, caption + "\n\n<i>нет фото</i>",
-            parse_mode="HTML", reply_markup=kb,
-        )
-        return
-
-    await bot.send_photo(
-        user_id, photo=candidate.photos[0].file_id,
-        caption=caption, reply_markup=kb, parse_mode="HTML",
-    )
+    if candidate.photos:
+        await bot.send_photo(user_id, photo=candidate.photos[0].file_id,
+                             caption=caption, reply_markup=kb, parse_mode="HTML")
+    else:
+        await bot.send_message(user_id, caption + "\n\n<i>нет фото</i>",
+                               parse_mode="HTML", reply_markup=kb)
 
 
 async def show_next(
@@ -80,6 +80,7 @@ async def show_next(
     bot: Bot,
     session: AsyncSession,
     delete_msg_id: int | None = None,
+    viewer: User | None = None,          # ← передаём уже загруженного юзера
 ) -> None:
     if delete_msg_id:
         try:
@@ -87,8 +88,11 @@ async def show_next(
         except Exception:
             pass
 
-    repo      = UserRepository(session)
-    viewer    = await repo.get(user_id)
+    repo = UserRepository(session)
+
+    # Если viewer не передан — загружаем (fallback для вызовов без db_user)
+    if viewer is None:
+        viewer = await repo.get(user_id)
     if viewer is None:
         await bot.send_message(user_id, "Сначала создай анкету — /start")
         return
@@ -109,14 +113,17 @@ async def show_next(
 # ── Лента ────────────────────────────────────────────────────────
 
 @router.message(F.text == "🕯️ Лента")
-async def handle_browse_msg(message: Message, bot: Bot, session: AsyncSession):
-    await show_next(message.from_user.id, bot, session)
+async def handle_browse_msg(message: Message, bot: Bot, session: AsyncSession,
+                            db_user: User | None = None):
+    # db_user уже в data от BanCheckMiddleware — не нужен лишний SELECT
+    await show_next(message.from_user.id, bot, session, viewer=db_user)
 
 
 # ── Лайк / Дизлайк ───────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("like:"))
-async def handle_like(call: CallbackQuery, bot: Bot, session: AsyncSession):
+async def handle_like(call: CallbackQuery, bot: Bot, session: AsyncSession,
+                      db_user: User | None = None):
     candidate_id = int(call.data.split(":")[1])
     svc          = BrowseService(session)
     result       = await svc.react(call.from_user.id, candidate_id, liked=True)
@@ -126,25 +133,28 @@ async def handle_like(call: CallbackQuery, bot: Bot, session: AsyncSession):
     if result.is_new_match and result.partner:
         _log.user("match: user=%s ↔ %s", call.from_user.id, candidate_id)
         await _send_match_notification(call.from_user.id, result.partner, bot)
-        viewer = await svc.users.get(call.from_user.id)
+        # viewer для уведомления партнёра
+        viewer = db_user or await svc.users.get(call.from_user.id)
         if viewer:
-            await _send_match_notification(
-                result.partner.id, viewer, bot, write_to=call.from_user.id
-            )
+            await _send_match_notification(result.partner.id, viewer, bot,
+                                           write_to=call.from_user.id)
     elif result.notify_like:
         await _notify_liked(candidate_id, bot)
 
-    await show_next(call.from_user.id, bot, session, delete_msg_id=call.message.message_id)
+    await show_next(call.from_user.id, bot, session,
+                    delete_msg_id=call.message.message_id, viewer=db_user)
 
 
 @router.callback_query(F.data.startswith("dislike:"))
-async def handle_dislike(call: CallbackQuery, bot: Bot, session: AsyncSession):
+async def handle_dislike(call: CallbackQuery, bot: Bot, session: AsyncSession,
+                         db_user: User | None = None):
     candidate_id = int(call.data.split(":")[1])
-    svc          = BrowseService(session)
+    svc = BrowseService(session)
     await svc.react(call.from_user.id, candidate_id, liked=False)
     await call.answer("⚰️")
     _log.user("dislike: user=%s → %s", call.from_user.id, candidate_id)
-    await show_next(call.from_user.id, bot, session, delete_msg_id=call.message.message_id)
+    await show_next(call.from_user.id, bot, session,
+                    delete_msg_id=call.message.message_id, viewer=db_user)
 
 
 # ── Лайки ────────────────────────────────────────────────────────
@@ -154,21 +164,12 @@ async def show_likes_msg(message: Message, bot: Bot, session: AsyncSession):
     await _show_likes_page(message.from_user.id, bot, session, page=0)
 
 
-async def _get_unanswered_likers(user_id: int, session: AsyncSession) -> list[int]:
-    liked_me  = select(Like.from_user).where(Like.to_user == user_id, Like.value.is_(True))
-    i_reacted = select(Like.to_user).where(Like.from_user == user_id)
-    result    = await session.execute(liked_me.where(Like.from_user.not_in(i_reacted)))
-    return [row[0] for row in result.fetchall()]
-
-
 @router.callback_query(F.data.startswith("likes_page:"))
 async def likes_page(call: CallbackQuery, bot: Bot, session: AsyncSession):
     page = int(call.data.split(":")[1])
     await call.answer()
-    await _show_likes_page(
-        call.from_user.id, bot, session, page=page,
-        delete_msg_id=call.message.message_id,
-    )
+    await _show_likes_page(call.from_user.id, bot, session, page=page,
+                           delete_msg_id=call.message.message_id)
 
 
 async def _show_likes_page(
@@ -184,34 +185,38 @@ async def _show_likes_page(
         except Exception:
             pass
 
-    liker_ids = await _get_unanswered_likers(user_id, session)
-    if not liker_ids:
+    like_repo = LikeRepository(session)
+    total     = await like_repo.count_unanswered_likers(user_id)   # один COUNT
+    if total == 0:
         await bot.send_message(user_id, "Новых лайков нет.")
         return
 
-    page  = max(0, min(page, len(liker_ids) - 1))
-    liker = await UserRepository(session).get(liker_ids[page])
+    page      = max(0, min(page, total - 1))
+    liker_id  = await like_repo.get_unanswered_liker_at(user_id, page)  # один SELECT LIMIT 1
+    if liker_id is None:
+        await bot.send_message(user_id, "Анкета удалена.")
+        return
+
+    liker = await UserRepository(session).get(liker_id)
     if not liker:
         await bot.send_message(user_id, "Анкета удалена.")
         return
 
-    caption = f"🩸  {page + 1} / {len(liker_ids)}\n\n" + _profile_caption(liker)
+    caption = f"🩸  {page + 1} / {total}\n\n" + _profile_caption(liker)
 
     builder = InlineKeyboardBuilder()
     if page > 0:
         builder.button(text="←", callback_data=f"likes_page:{page - 1}")
-    builder.button(text=f"{page + 1}/{len(liker_ids)}", callback_data="noop")
-    if page < len(liker_ids) - 1:
+    builder.button(text=f"{page + 1}/{total}", callback_data="noop")
+    if page < total - 1:
         builder.button(text="→", callback_data=f"likes_page:{page + 1}")
     builder.button(text="⚰️", callback_data=f"likes_react:dislike:{liker.id}:{page}")
     builder.button(text="🩸", callback_data=f"likes_react:like:{liker.id}:{page}")
     builder.adjust(3, 2)
 
     if liker.photos:
-        await bot.send_photo(
-            user_id, photo=liker.photos[0].file_id,
-            caption=caption, reply_markup=builder.as_markup(), parse_mode="HTML",
-        )
+        await bot.send_photo(user_id, photo=liker.photos[0].file_id,
+                             caption=caption, reply_markup=builder.as_markup(), parse_mode="HTML")
     else:
         await bot.send_message(user_id, caption, reply_markup=builder.as_markup(), parse_mode="HTML")
 
@@ -232,12 +237,12 @@ async def likes_react(call: CallbackQuery, bot: Bot, session: AsyncSession):
         await _send_match_notification(call.from_user.id, result.partner, bot)
         viewer = await svc.users.get(call.from_user.id)
         if viewer:
-            await _send_match_notification(
-                result.partner.id, viewer, bot, write_to=call.from_user.id
-            )
+            await _send_match_notification(result.partner.id, viewer, bot,
+                                           write_to=call.from_user.id)
 
-    liker_ids = await _get_unanswered_likers(call.from_user.id, session)
-    if not liker_ids:
+    like_repo = LikeRepository(session)
+    total     = await like_repo.count_unanswered_likers(call.from_user.id)
+    if total == 0:
         try:
             await bot.delete_message(call.from_user.id, call.message.message_id)
         except Exception:
@@ -247,7 +252,7 @@ async def likes_react(call: CallbackQuery, bot: Bot, session: AsyncSession):
 
     await _show_likes_page(
         call.from_user.id, bot, session,
-        page=min(page, len(liker_ids) - 1),
+        page=min(page, total - 1),
         delete_msg_id=call.message.message_id,
     )
 
@@ -263,10 +268,8 @@ async def show_matches_msg(message: Message, bot: Bot, session: AsyncSession):
 async def matches_page(call: CallbackQuery, bot: Bot, session: AsyncSession):
     page = int(call.data.split(":")[1])
     await call.answer()
-    await _show_matches_page(
-        call.from_user.id, bot, session, page=page,
-        delete_msg_id=call.message.message_id,
-    )
+    await _show_matches_page(call.from_user.id, bot, session, page=page,
+                             delete_msg_id=call.message.message_id)
 
 
 async def _show_matches_page(
@@ -306,17 +309,13 @@ async def _show_matches_page(
     builder.adjust(3, 1)
 
     if partner.photos:
-        await bot.send_photo(
-            user_id, photo=partner.photos[0].file_id,
-            caption=caption, reply_markup=builder.as_markup(), parse_mode="HTML",
-        )
+        await bot.send_photo(user_id, photo=partner.photos[0].file_id,
+                             caption=caption, reply_markup=builder.as_markup(), parse_mode="HTML")
     else:
-        await bot.send_message(
-            user_id, caption, reply_markup=builder.as_markup(), parse_mode="HTML",
-        )
+        await bot.send_message(user_id, caption, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
-# ── Вспомогательные ──────────────────────────────────────────────
+# ── Уведомления ──────────────────────────────────────────────────
 
 async def _send_match_notification(
     user_id: int, partner: User, bot: Bot, write_to: int | None = None,
@@ -327,10 +326,8 @@ async def _send_match_notification(
     kb       = kb_match(target, username=username)
     try:
         if partner.photos:
-            await bot.send_photo(
-                user_id, photo=partner.photos[0].file_id,
-                caption=caption, reply_markup=kb, parse_mode="HTML",
-            )
+            await bot.send_photo(user_id, photo=partner.photos[0].file_id,
+                                 caption=caption, reply_markup=kb, parse_mode="HTML")
         else:
             await bot.send_message(user_id, caption, reply_markup=kb, parse_mode="HTML")
     except Exception as e:

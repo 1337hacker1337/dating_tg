@@ -10,10 +10,8 @@ from config import settings
 from db.session import engine
 from db.models import Base
 from bot.middlewares.session import SessionMiddleware, BanCheckMiddleware
-from bot.handlers import start, browse, profile
-from bot.handlers import admin  # ← новый роутер
+from bot.handlers import start, browse, profile, admin
 
-# Инициализация логирования — первым делом
 log.setup(log_dir="logs", debug=True)
 _log = log.get("bot.main")
 
@@ -22,7 +20,6 @@ async def on_startup(bot: Bot) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     _log.info("БД готова")
-
     if settings.use_webhook:
         url = f"{settings.webhook_host}{settings.webhook_path}"
         await bot.set_webhook(url)
@@ -37,17 +34,14 @@ async def on_shutdown(bot: Bot) -> None:
 
 
 async def main() -> None:
-    bot = Bot(
-        token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
-    dp = Dispatcher(storage=MemoryStorage())
+    bot = Bot(token=settings.bot_token,
+              default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp  = Dispatcher(storage=MemoryStorage())
 
-    # Глобальные мидлвари
     dp.update.middleware(SessionMiddleware())
     dp.update.middleware(BanCheckMiddleware())
 
-    # Роутеры — admin первым, чтобы /admin не перехватывали другие
+    # admin первым — чтобы /admin не перехватывали другие роутеры
     dp.include_router(admin.router)
     dp.include_router(start.router)
     dp.include_router(browse.router)

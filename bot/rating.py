@@ -38,13 +38,8 @@ def rating_bar(winrate: float, width: int = 8) -> str:
 
 
 def format_rating_line(avg_rating: float, rating_count: int) -> str:
-    """
-    До 50 оценок:  🧬 <i>Калибровка · 12/50</i>
-    После:         📊 [██████░░] 78% 🔮 htn
-    """
     if rating_count < MIN_VOTES:
         return f"🧬  калибровка  {rating_count}/{MIN_VOTES}"
-
     pct  = round(avg_rating * 100)
     tier = get_tier(avg_rating)
     bar  = rating_bar(avg_rating)

@@ -1,6 +1,6 @@
 from typing import Any, Awaitable, Callable
 
-from aiogram import BaseMiddleware, Router
+from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
 
 from db.repositories.admin_repo import AdminRepository
@@ -10,10 +10,7 @@ _log = log.get(__name__)
 
 
 class AdminMiddleware(BaseMiddleware):
-    """
-    Пропускает апдейты только для пользователей из таблицы admins.
-    Вешается исключительно на admin-роутер.
-    """
+    """Пропускает апдейты только для пользователей из таблицы admins."""
 
     async def __call__(
         self,
@@ -23,7 +20,7 @@ class AdminMiddleware(BaseMiddleware):
     ) -> Any:
         user = data.get("event_from_user")
         if user is None:
-            return  # анонимный апдейт — игнор
+            return
 
         session = data.get("session")
         if session is None:
@@ -31,7 +28,6 @@ class AdminMiddleware(BaseMiddleware):
 
         repo = AdminRepository(session)
         if not await repo.is_admin(user.id):
-            # Молча игнорируем — не раскрываем факт существования панели
             if isinstance(event, CallbackQuery):
                 await event.answer("⛔ Нет доступа.", show_alert=True)
             elif isinstance(event, Message):
