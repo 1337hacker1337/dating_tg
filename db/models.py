@@ -61,7 +61,7 @@ class User(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("age >= 18 AND age <= 99", name="ck_users_age"),
+        CheckConstraint("age >= 1 AND age <= 99", name="ck_users_age"),
     )
 
 

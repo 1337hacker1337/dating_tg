@@ -49,11 +49,11 @@ class BanCheckMiddleware(BaseMiddleware):
             # Отвечаем и прерываем цепочку
             from aiogram.types import Message, CallbackQuery
             if isinstance(event, CallbackQuery):
-                await event.answer("🚫 Ваш аккаунт заблокирован.", show_alert=True)
+                await event.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.", show_alert=True)
             elif isinstance(event, Message):
-                await event.answer("🚫 Ваш аккаунт заблокирован.")
+                await event.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.")
             elif hasattr(event, "message") and event.message:
-                await event.message.answer("🚫 Ваш аккаунт заблокирован.")
+                await event.message.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.")
             return  # не вызываем handler
 
         # Обновляем last_seen для зарегистрированных
