@@ -60,7 +60,7 @@ class User(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("age >= 1 AND age <= 99", name="ck_users_age"),
+        CheckConstraint("age >= 14 AND age <= 99", name="ck_users_age"),
         Index("ix_users_active_banned", "is_active", "is_banned"),
         Index("ix_users_gender", "gender"),
         Index("ix_users_looking_for", "looking_for"),

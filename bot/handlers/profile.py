@@ -119,7 +119,7 @@ async def edit_field_start(call: CallbackQuery, state: FSMContext):
         await state.update_data(edit_field="name")
 
     elif field == "age":
-        await call.message.answer("🎂 <b>Введи новый возраст</b> <code>(1–99)</code>:", parse_mode="HTML")
+        await call.message.answer("🎂 <b>Введи новый возраст</b> <code>(14–99)</code>:", parse_mode="HTML")
         await state.set_state(EditProfile.new_value)
         await state.update_data(edit_field="age")
 
@@ -183,8 +183,8 @@ async def apply_edit_value(message: Message, state: FSMContext, session: AsyncSe
 
     elif field == "age":
         txt = (message.text or "").strip()
-        if not txt.isdigit() or not (1 <= int(txt) <= 99):
-            await message.answer("⚠️  Возраст от 1 до 99.")
+        if not txt.isdigit() or not (14 <= int(txt) <= 99):
+            await message.answer("⚠️  Возраст от 14 до 99.")
             return
         await session.execute(update(User).where(User.id == message.from_user.id).values(age=int(txt)))
         await session.commit()

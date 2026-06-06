@@ -47,7 +47,7 @@ async def reg_name(message: Message, state: FSMContext):
         return
     await state.update_data(name=name)
     await message.answer(
-        f"{_progress(2)}\n\n<b>{name}</b>\n\nСколько тебе лет?  <i>1–99</i>",
+        f"{_progress(2)}\n\n<b>{name}</b>\n\nСколько тебе лет?  <i>14–99</i>",
         parse_mode="HTML",
     )
     await state.set_state(Registration.age)
@@ -56,8 +56,8 @@ async def reg_name(message: Message, state: FSMContext):
 @router.message(Registration.age)
 async def reg_age(message: Message, state: FSMContext):
     text = (message.text or "").strip()
-    if not text.isdigit() or not (1 <= int(text) <= 99):
-        await message.answer("⚠️  Введи число от 1 до 99.")
+    if not text.isdigit() or not (14 <= int(text) <= 99):
+        await message.answer("⚠️  Введи число от 14 до 99.")
         return
     await state.update_data(age=int(text))
     await message.answer(f"{_progress(3)}\n\nТвой пол:", parse_mode="HTML", reply_markup=kb_gender())

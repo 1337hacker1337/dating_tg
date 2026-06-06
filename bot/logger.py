@@ -107,12 +107,18 @@ class _FileFormatter(logging.Formatter):
 def setup(log_dir: str = "logs", debug: bool = False) -> None:
     Path(log_dir).mkdir(exist_ok=True)
 
+    # Windows: включаем ANSI в PowerShell / cmd
+    if sys.platform == "win32":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
 
-    # Консоль: USER + INFO + WARNING + ERROR (не DEBUG)
+    # Консоль: INFO и выше (INFO=20 < USER=25, оба пройдут), не DEBUG
     console = logging.StreamHandler(sys.stdout)
-    console.setLevel(USER_LEVEL)
+    console.setLevel(logging.INFO)
     console.setFormatter(_ConsoleFormatter())
     root.addHandler(console)
 
