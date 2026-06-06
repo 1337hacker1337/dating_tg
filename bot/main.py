@@ -11,6 +11,7 @@ from db.session import engine
 from db.models import Base
 from bot.middlewares.session import SessionMiddleware, BanCheckMiddleware
 from bot.handlers import start, browse, profile
+from bot.handlers import admin  # ← новый роутер
 
 # Инициализация логирования — первым делом
 log.setup(log_dir="logs", debug=True)
@@ -42,9 +43,12 @@ async def main() -> None:
     )
     dp = Dispatcher(storage=MemoryStorage())
 
+    # Глобальные мидлвари
     dp.update.middleware(SessionMiddleware())
     dp.update.middleware(BanCheckMiddleware())
 
+    # Роутеры — admin первым, чтобы /admin не перехватывали другие
+    dp.include_router(admin.router)
     dp.include_router(start.router)
     dp.include_router(browse.router)
     dp.include_router(profile.router)
