@@ -1,7 +1,9 @@
 import math
 import logging
 
+import bot.logger as _logmod
 logger = logging.getLogger(__name__)
+_log = _logmod.get(__name__)
 
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message, InputMediaPhoto
@@ -119,8 +121,10 @@ async def handle_like(call: CallbackQuery, bot: Bot, session: AsyncSession):
     svc          = BrowseService(session)
     result       = await svc.react(call.from_user.id, candidate_id, liked=True)
     await call.answer("🩸")
+    _log.user("like: user=%s → %s", call.from_user.id, candidate_id)
 
     if result.is_new_match and result.partner:
+        _log.user("match: user=%s ↔ %s", call.from_user.id, candidate_id)
         await _send_match_notification(call.from_user.id, result.partner, bot)
         viewer = await svc.users.get(call.from_user.id)
         if viewer:
@@ -139,6 +143,7 @@ async def handle_dislike(call: CallbackQuery, bot: Bot, session: AsyncSession):
     svc          = BrowseService(session)
     await svc.react(call.from_user.id, candidate_id, liked=False)
     await call.answer("⚰️")
+    _log.user("dislike: user=%s → %s", call.from_user.id, candidate_id)
     await show_next(call.from_user.id, bot, session, delete_msg_id=call.message.message_id)
 
 
@@ -223,6 +228,7 @@ async def likes_react(call: CallbackQuery, bot: Bot, session: AsyncSession):
     await call.answer("🩸" if liked else "⚰️")
 
     if result.is_new_match and result.partner:
+        _log.user("match: user=%s ↔ %s (from likes)", call.from_user.id, liker_id)
         await _send_match_notification(call.from_user.id, result.partner, bot)
         viewer = await svc.users.get(call.from_user.id)
         if viewer:

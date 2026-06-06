@@ -8,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import User, GenderEnum, LookingForEnum, Like, Match
 from bot.keyboards import kb_main_menu, kb_profile_actions, kb_match, kb_location, remove_kb
 from bot.services import ProfileService, BrowseService
+from bot import logger as log
+
+_log = log.get(__name__)
 from bot.rating import format_rating_line
 from bot.states import EditProfile
 from db.repositories.user_repo import UserRepository
@@ -344,6 +347,7 @@ async def delete_profile(call: CallbackQuery, session: AsyncSession, state: FSMC
     await repo.delete(call.from_user.id)
     await session.commit()
     await state.clear()
+    _log.user("delete_profile: user=%s", call.from_user.id)
     await call.answer()
     await call.message.answer(
         "Анкета удалена. Если захочешь вернуться — /start.",
@@ -378,6 +382,8 @@ async def save_new_location(message: Message, state: FSMContext, session: AsyncS
         message.location.longitude,
     )
     await state.clear()
+    _log.user("update_location: user=%s lat=%.4f lon=%.4f",
+             message.from_user.id, message.location.latitude, message.location.longitude)
     await message.answer(
         "📡  Геолокация обновлена.",
         parse_mode="HTML",

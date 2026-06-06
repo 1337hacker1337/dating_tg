@@ -4,6 +4,9 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update
 
 from db.session import AsyncSessionFactory
+from bot import logger as log
+
+_log = log.get(__name__)
 from db.repositories.user_repo import UserRepository
 
 
@@ -54,6 +57,7 @@ class BanCheckMiddleware(BaseMiddleware):
                 await event.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.")
             elif hasattr(event, "message") and event.message:
                 await event.message.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.")
+            _log.warning("banned user blocked: user=%s", user.id)
             return  # не вызываем handler
 
         # Обновляем last_seen для зарегистрированных

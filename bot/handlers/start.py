@@ -10,6 +10,9 @@ from bot.keyboards import (
     kb_main_menu, remove_kb,
 )
 from bot.services import ProfileService
+from bot import logger as log
+
+_log = log.get(__name__)
 from db.repositories.user_repo import UserRepository
 
 router = Router()
@@ -190,6 +193,10 @@ async def reg_photo(message: Message, state: FSMContext, session: AsyncSession):
     )
     await svc.add_photo(user.id, file_id)
     await state.clear()
+
+    _log.user("register: user=%s (@%s) name=%s age=%s gender=%s lf=%s",
+             message.from_user.id, message.from_user.username,
+             data['name'], data['age'], data['gender'], data['looking_for'])
 
     await message.answer(
         f"Анкета создана, <b>{data['name']}</b>.",
