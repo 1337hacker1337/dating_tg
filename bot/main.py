@@ -41,7 +41,6 @@ async def main() -> None:
     dp.update.middleware(SessionMiddleware())
     dp.update.middleware(BanCheckMiddleware())
 
-    # admin первым — чтобы /admin не перехватывали другие роутеры
     dp.include_router(admin.router)
     dp.include_router(start.router)
     dp.include_router(browse.router)

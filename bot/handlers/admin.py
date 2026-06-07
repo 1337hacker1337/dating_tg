@@ -1,12 +1,5 @@
 """
-bot/handlers/admin.py
-─────────────────────
-Telegram-админ панель. Доступ — только через таблицу admins.
-Команда входа: /admin
-
-Оптимизация: _user_card() делает 2 запроса вместо 3 (get_profile_stats).
-Убрано дублирование хэндлеров AdminLookup.waiting_id — теперь один хэндлер
-с флагом add_admin_mode в state.
+bot/handlers/admin.py — Telegram-админ панель. Доступ — только через таблицу admins.
 """
 import asyncio
 
@@ -36,20 +29,13 @@ router.message.middleware(AdminMiddleware())
 router.callback_query.middleware(AdminMiddleware())
 
 
-# ════════════════════════════════════════════════════════════════
-# Вспомогательные
-# ════════════════════════════════════════════════════════════════
-
 async def _stats_text(session: AsyncSession) -> str:
     repo = UserRepository(session)
-
     total  = await repo.count_total()
     active = await repo.count_active()
     banned = await repo.count_banned()
-
     likes_r   = await session.execute(select(func.count()).select_from(Like).where(Like.value.is_(True)))
     matches_r = await session.execute(select(func.count()).select_from(Match))
-
     return (
         "<b>📊 Статистика</b>\n\n"
         f"├ 👥 Всего юзеров:   <code>{total}</code>\n"
@@ -61,14 +47,15 @@ async def _stats_text(session: AsyncSession) -> str:
 
 
 async def _user_card(user: User, session: AsyncSession) -> str:
-    # Один вызов вместо трёх отдельных COUNT
     repo  = UserRepository(session)
     stats = await repo.get_profile_stats(user.id)
-
     status  = "🚷 ЗАБАНЕН" if user.is_banned else ("✅ активен" if user.is_active else "🙈 скрыт")
-    geo     = f"{user.latitude:.4f}, {user.longitude:.4f}" if user.latitude else "не указана"
+    geo     = (
+        f"{user.latitude:.4f}, {user.longitude:.4f}"
+        if user.latitude is not None and user.longitude is not None
+        else "не указана"
+    )
     mention = f"@{user.username}" if user.username else "нет username"
-
     return (
         f"<b>👤 Анкета #{user.id}</b>\n\n"
         f"├ Имя:        <b>{user.name}</b>, {user.age}\n"
@@ -83,10 +70,6 @@ async def _user_card(user: User, session: AsyncSession) -> str:
         f"└ ⚔️ Мэтчей:   <code>{stats['matches']}</code>"
     )
 
-
-# ════════════════════════════════════════════════════════════════
-# /admin
-# ════════════════════════════════════════════════════════════════
 
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, state: FSMContext):
@@ -108,10 +91,6 @@ async def adm_menu(call: CallbackQuery, state: FSMContext):
                                   parse_mode="HTML", reply_markup=kb_admin_main())
 
 
-# ════════════════════════════════════════════════════════════════
-# 📊 Статистика
-# ════════════════════════════════════════════════════════════════
-
 @router.callback_query(F.data == "adm:stats")
 async def adm_stats(call: CallbackQuery, session: AsyncSession):
     await call.answer()
@@ -121,10 +100,6 @@ async def adm_stats(call: CallbackQuery, session: AsyncSession):
     except Exception:
         await call.message.answer(text, parse_mode="HTML", reply_markup=kb_admin_back())
 
-
-# ════════════════════════════════════════════════════════════════
-# 👤 Найти юзера + добавить админа — ОДИН хэндлер на AdminLookup
-# ════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "adm:lookup")
 async def adm_lookup_start(call: CallbackQuery, state: FSMContext):
@@ -184,10 +159,6 @@ async def adm_lookup_handler(message: Message, state: FSMContext, session: Async
         _log.user("admin lookup: admin=%s target=%s", message.from_user.id, target_id)
 
 
-# ════════════════════════════════════════════════════════════════
-# 🚷 Бан
-# ════════════════════════════════════════════════════════════════
-
 @router.callback_query(F.data == "adm:ban")
 async def adm_ban_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
@@ -228,10 +199,6 @@ async def _do_ban(target_id: int, admin_id: int, session: AsyncSession, reply_to
                           parse_mode="HTML", reply_markup=kb_admin_back())
 
 
-# ════════════════════════════════════════════════════════════════
-# ✅ Разбан
-# ════════════════════════════════════════════════════════════════
-
 @router.callback_query(F.data == "adm:unban")
 async def adm_unban_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
@@ -271,10 +238,6 @@ async def _do_unban(target_id: int, admin_id: int, session: AsyncSession, reply_
     await reply_to.answer(f"✅ Пользователь <code>{target_id}</code> разбанен.",
                           parse_mode="HTML", reply_markup=kb_admin_back())
 
-
-# ════════════════════════════════════════════════════════════════
-# 📣 Рассылка
-# ════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "adm:broadcast")
 async def adm_broadcast_start(call: CallbackQuery, state: FSMContext):
@@ -329,10 +292,6 @@ async def adm_broadcast_exec(call: CallbackQuery, state: FSMContext, bot: Bot, s
         parse_mode="HTML", reply_markup=kb_admin_back(),
     )
 
-
-# ════════════════════════════════════════════════════════════════
-# 🧬 Калибровка
-# ════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "adm:calibration")
 async def adm_cal_start(call: CallbackQuery, state: FSMContext):
@@ -396,10 +355,6 @@ async def adm_reset_cal_inline(call: CallbackQuery, session: AsyncSession):
     await call.answer("🧬 Калибровка сброшена.", show_alert=True)
     _log.user("admin reset_cal inline: admin=%s target=%s", call.from_user.id, target_id)
 
-
-# ════════════════════════════════════════════════════════════════
-# 👑 Администраторы
-# ════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "adm:admins")
 async def adm_admins_list(call: CallbackQuery, session: AsyncSession):

@@ -47,6 +47,15 @@ class LikeRepository:
         )
         return result.scalar()
 
+    async def reaction_exists(self, from_user: int, to_user: int) -> bool:
+        """Любая реакция (лайк ИЛИ дизлайк) уже была — чтобы не слать повторное уведомление."""
+        result = await self.session.execute(
+            select(exists().where(
+                and_(Like.from_user == from_user, Like.to_user == to_user)
+            ))
+        )
+        return result.scalar()
+
     async def has_mutual_like(self, user_a: int, user_b: int) -> bool:
         result = await self.session.execute(
             select(exists().where(

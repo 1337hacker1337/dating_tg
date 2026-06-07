@@ -55,9 +55,6 @@ class User(Base):
     photos:  Mapped[list["Photo"]]  = relationship(
         "Photo", back_populates="user", order_by="Photo.position"
     )
-    ratings: Mapped[list["Rating"]] = relationship(
-        "Rating", back_populates="target", foreign_keys="Rating.target_id"
-    )
 
     __table_args__ = (
         CheckConstraint("age >= 14 AND age <= 99", name="ck_users_age"),
@@ -107,25 +104,6 @@ class Match(Base):
     __table_args__ = (
         UniqueConstraint("user1_id", "user2_id", name="uq_matches_pair"),
         CheckConstraint("user1_id < user2_id", name="ck_matches_order"),
-    )
-
-
-class Rating(Base):
-    __tablename__ = "ratings"
-
-    id:        Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    voter_id:  Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
-    target_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
-    score:     Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    target: Mapped["User"] = relationship(
-        "User", back_populates="ratings", foreign_keys=[target_id]
-    )
-
-    __table_args__ = (
-        UniqueConstraint("voter_id", "target_id", name="uq_ratings_pair"),
-        CheckConstraint("score >= 1 AND score <= 10", name="ck_rating_score"),
     )
 
 

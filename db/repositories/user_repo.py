@@ -11,10 +11,6 @@ class UserRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    # ------------------------------------------------------------------
-    # CRUD
-    # ------------------------------------------------------------------
-
     async def get(self, user_id: int) -> Optional[User]:
         result = await self.session.execute(
             select(User).where(User.id == user_id).options(selectinload(User.photos))
@@ -84,10 +80,6 @@ class UserRepository:
     async def delete(self, user_id: int) -> None:
         await self.session.execute(delete(User).where(User.id == user_id))
 
-    # ------------------------------------------------------------------
-    # Фото
-    # ------------------------------------------------------------------
-
     async def count_photos(self, user_id: int) -> int:
         result = await self.session.execute(
             select(func.count()).where(Photo.user_id == user_id)
@@ -104,14 +96,7 @@ class UserRepository:
     async def delete_photos(self, user_id: int) -> None:
         await self.session.execute(delete(Photo).where(Photo.user_id == user_id))
 
-    # ------------------------------------------------------------------
-    # Статистика профиля — ОДИН запрос вместо трёх
-    # ------------------------------------------------------------------
-
     async def get_profile_stats(self, user_id: int) -> dict:
-        """
-        Возвращает {'likes': int, 'dislikes': int, 'matches': int} одним запросом.
-        """
         likes_q = (
             select(
                 func.count().filter(Like.value.is_(True)).label("likes"),
@@ -131,20 +116,11 @@ class UserRepository:
             "matches":  row_m.matches  or 0,
         }
 
-    # ------------------------------------------------------------------
-    # Подбор анкет — оптимизированный
-    # ------------------------------------------------------------------
-
     async def get_next_candidate(
         self,
         current_user: User,
         nearby_radius_km: int = 50,
     ) -> Optional[User]:
-        """
-        Один SQL-запрос с приоритетом ближайших через CASE-сортировку.
-        Если у зрителя есть координаты — ближние идут первыми (приоритет 0),
-        остальные — вторыми (приоритет 1), внутри каждой группы random().
-        """
         seen_subq = select(Like.to_user).where(Like.from_user == current_user.id)
 
         base_filter = and_(
@@ -171,7 +147,6 @@ class UserRepository:
                 User.longitude.between(lon - deg, lon + deg),
             )
 
-            # CASE: 0 = рядом, 1 = далеко — один запрос, правильный приоритет
             priority = case((in_bbox, 0), else_=1)
             dist_sq  = (
                 (User.latitude - lat) * (User.latitude - lat) +
@@ -182,7 +157,7 @@ class UserRepository:
                 select(User)
                 .options(selectinload(User.photos))
                 .where(base_filter)
-                .order_by(priority, dist_sq)
+                .order_by(priority, dist_sq, func.random())
                 .limit(1)
             )
         else:
@@ -196,10 +171,6 @@ class UserRepository:
 
         result = await self.session.execute(q)
         return result.scalar_one_or_none()
-
-    # ------------------------------------------------------------------
-    # Статистика (для админки)
-    # ------------------------------------------------------------------
 
     async def count_total(self) -> int:
         r = await self.session.execute(select(func.count()).select_from(User))

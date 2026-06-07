@@ -29,14 +29,6 @@ class SessionMiddleware(BaseMiddleware):
 
 
 class BanCheckMiddleware(BaseMiddleware):
-    """
-    Блокирует забаненных пользователей.
-
-    Оптимизация: используем get_light() — без selectinload фото,
-    так как здесь нужны только is_banned / is_active / id.
-    db_user кладём в data, чтобы хэндлеры не делали повторный SELECT.
-    """
-
     async def __call__(
         self,
         handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
@@ -52,7 +44,7 @@ class BanCheckMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         repo    = UserRepository(session)
-        db_user = await repo.get_light(user.id)   # ← без фото, быстрее
+        db_user = await repo.get_light(user.id)
 
         if db_user and db_user.is_banned:
             if isinstance(event, CallbackQuery):
@@ -65,7 +57,6 @@ class BanCheckMiddleware(BaseMiddleware):
             return
 
         if db_user:
-            # fire-and-forget через отдельный UPDATE — не блокируем основной поток
             await repo.update_last_seen(user.id)
             await session.commit()
 

@@ -7,7 +7,6 @@ from config import settings
 from db.models import GenderEnum, LookingForEnum, User
 from db.repositories.user_repo import UserRepository
 from db.repositories.like_repo import LikeRepository, MatchRepository
-from db.repositories.rating_repo import RatingRepository
 
 MAX_PHOTOS = 5
 
@@ -87,7 +86,8 @@ class BrowseService:
         )
 
     async def react(self, from_user_id: int, to_user_id: int, liked: bool) -> MatchResult:
-        was_already_liked = await self.likes.already_liked(from_user_id, to_user_id)
+        # была ли ВООБЩЕ реакция раньше (лайк или дизлайк) — для уведомления
+        had_prev_reaction = await self.likes.reaction_exists(from_user_id, to_user_id)
         await self.likes.add(from_user_id, to_user_id, liked)
 
         if liked:
@@ -104,21 +104,10 @@ class BrowseService:
                 return MatchResult(matched=True, is_new_match=False)
 
             await self.session.commit()
-            return MatchResult(matched=False, notify_like=not was_already_liked)
+            return MatchResult(matched=False, notify_like=not had_prev_reaction)
 
         await self.session.commit()
         return MatchResult(matched=False, notify_like=False)
 
     async def get_matches(self, user_id: int) -> list[User]:
         return await self.matches.list_for_user(user_id)
-
-
-class RatingService:
-    def __init__(self, session: AsyncSession):
-        self.session = session
-        self.repo    = RatingRepository(session)
-
-    async def vote(self, voter_id: int, target_id: int, score: int) -> float:
-        await self.repo.upsert(voter_id, target_id, score)
-        await self.session.commit()
-        return await self.repo.get_avg(target_id)

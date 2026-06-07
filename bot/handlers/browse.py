@@ -1,21 +1,7 @@
 """
-bot/handlers/browse.py
-──────────────────────
-Горячий путь: лента / лайк / дизлайк / просмотр лайков / мэтчи.
-
-Ключевые оптимизации:
-  • show_next() принимает viewer (уже загруженный User) — не делает повторный SELECT
-  • _show_likes_page() использует get_unanswered_liker_at(offset) — один SELECT вместо
-    загрузки всего списка liker_ids в память
-  • _profile_caption() — чистая функция, никаких запросов
+bot/handlers/browse.py — лента / лайк / дизлайк / просмотр лайков / мэтчи.
 """
 import math
-import logging
-
-import bot.logger as _logmod
-
-logger = logging.getLogger(__name__)
-_log   = _logmod.get(__name__)
 
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message
@@ -25,14 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.keyboards import kb_main_menu, kb_match, kb_swipe
 from bot.rating import format_rating_line
 from bot.services import BrowseService
+from bot import logger as log
+from config import settings
 from db.models import User
 from db.repositories.user_repo import UserRepository
 from db.repositories.like_repo import LikeRepository
 
+_log   = log.get(__name__)
 router = Router()
 
-
-# ── Вспомогательные ──────────────────────────────────────────────
 
 def _haversine_km(lat1, lon1, lat2, lon2) -> float:
     R = 6371.0
@@ -80,7 +67,7 @@ async def show_next(
     bot: Bot,
     session: AsyncSession,
     delete_msg_id: int | None = None,
-    viewer: User | None = None,          # ← передаём уже загруженного юзера
+    viewer: User | None = None,
 ) -> None:
     if delete_msg_id:
         try:
@@ -90,14 +77,15 @@ async def show_next(
 
     repo = UserRepository(session)
 
-    # Если viewer не передан — загружаем (fallback для вызовов без db_user)
     if viewer is None:
         viewer = await repo.get(user_id)
     if viewer is None:
         await bot.send_message(user_id, "Сначала создай анкету — /start")
         return
 
-    candidate = await repo.get_next_candidate(viewer, nearby_radius_km=50)
+    candidate = await repo.get_next_candidate(
+        viewer, nearby_radius_km=settings.nearby_radius_km
+    )
     if candidate is None:
         await bot.send_message(
             user_id,
@@ -110,16 +98,11 @@ async def show_next(
     await _send_card(user_id, bot, candidate, viewer=viewer)
 
 
-# ── Лента ────────────────────────────────────────────────────────
-
 @router.message(F.text == "🕯️ Лента")
 async def handle_browse_msg(message: Message, bot: Bot, session: AsyncSession,
                             db_user: User | None = None):
-    # db_user уже в data от BanCheckMiddleware — не нужен лишний SELECT
     await show_next(message.from_user.id, bot, session, viewer=db_user)
 
-
-# ── Лайк / Дизлайк ───────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("like:"))
 async def handle_like(call: CallbackQuery, bot: Bot, session: AsyncSession,
@@ -133,7 +116,6 @@ async def handle_like(call: CallbackQuery, bot: Bot, session: AsyncSession,
     if result.is_new_match and result.partner:
         _log.user("match: user=%s ↔ %s", call.from_user.id, candidate_id)
         await _send_match_notification(call.from_user.id, result.partner, bot)
-        # viewer для уведомления партнёра
         viewer = db_user or await svc.users.get(call.from_user.id)
         if viewer:
             await _send_match_notification(result.partner.id, viewer, bot,
@@ -156,8 +138,6 @@ async def handle_dislike(call: CallbackQuery, bot: Bot, session: AsyncSession,
     await show_next(call.from_user.id, bot, session,
                     delete_msg_id=call.message.message_id, viewer=db_user)
 
-
-# ── Лайки ────────────────────────────────────────────────────────
 
 @router.message(F.text == "🩸 Лайки")
 async def show_likes_msg(message: Message, bot: Bot, session: AsyncSession):
@@ -186,13 +166,13 @@ async def _show_likes_page(
             pass
 
     like_repo = LikeRepository(session)
-    total     = await like_repo.count_unanswered_likers(user_id)   # один COUNT
+    total     = await like_repo.count_unanswered_likers(user_id)
     if total == 0:
         await bot.send_message(user_id, "Новых лайков нет.")
         return
 
     page      = max(0, min(page, total - 1))
-    liker_id  = await like_repo.get_unanswered_liker_at(user_id, page)  # один SELECT LIMIT 1
+    liker_id  = await like_repo.get_unanswered_liker_at(user_id, page)
     if liker_id is None:
         await bot.send_message(user_id, "Анкета удалена.")
         return
@@ -257,8 +237,6 @@ async def likes_react(call: CallbackQuery, bot: Bot, session: AsyncSession):
     )
 
 
-# ── Мэтчи ────────────────────────────────────────────────────────
-
 @router.message(F.text == "💬 Мэтчи")
 async def show_matches_msg(message: Message, bot: Bot, session: AsyncSession):
     await _show_matches_page(message.from_user.id, bot, session, page=0)
@@ -315,8 +293,6 @@ async def _show_matches_page(
         await bot.send_message(user_id, caption, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
-# ── Уведомления ──────────────────────────────────────────────────
-
 async def _send_match_notification(
     user_id: int, partner: User, bot: Bot, write_to: int | None = None,
 ) -> None:
@@ -331,7 +307,7 @@ async def _send_match_notification(
         else:
             await bot.send_message(user_id, caption, reply_markup=kb, parse_mode="HTML")
     except Exception as e:
-        logger.warning("match notify failed user_id=%s: %s", user_id, e)
+        _log.warning("match notify failed user_id=%s: %s", user_id, e)
 
 
 async def _notify_liked(user_id: int, bot: Bot) -> None:
@@ -342,7 +318,7 @@ async def _notify_liked(user_id: int, bot: Bot) -> None:
             parse_mode="HTML",
         )
     except Exception as e:
-        logger.warning("like notify failed user_id=%s: %s", user_id, e)
+        _log.warning("like notify failed user_id=%s: %s", user_id, e)
 
 
 @router.callback_query(F.data == "noop")

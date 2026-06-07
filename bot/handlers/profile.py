@@ -1,10 +1,5 @@
 """
-bot/handlers/profile.py
-───────────────────────
-Профиль, редактирование, скрыть/показать/удалить, геолокация.
-
-Оптимизация: _profile_text() делает 2 запроса вместо 3 —
-get_profile_stats() возвращает likes/dislikes/matches одним SQL.
+bot/handlers/profile.py — профиль, редактирование, скрыть/показать/удалить, геолокация.
 """
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
@@ -28,11 +23,9 @@ GENDER_MAP = {"male": "Мужской", "female": "Женский", "other": "Д
 LF_MAP     = {"male": "Парней",  "female": "Девушек", "any":   "Всех"}
 
 
-# ── Текст профиля — 2 запроса вместо 3 ──────────────────────────
-
 async def _profile_text(user: User, session) -> str:
     repo  = UserRepository(session)
-    stats = await repo.get_profile_stats(user.id)   # один SQL вместо трёх
+    stats = await repo.get_profile_stats(user.id)
 
     status = "активна" if user.is_active else "скрыта"
     geo    = "📡 указана" if user.latitude is not None else "📡 не указана"
@@ -55,15 +48,11 @@ async def _profile_text(user: User, session) -> str:
     return "\n".join(lines)
 
 
-# ── Главное меню ─────────────────────────────────────────────────
-
 @router.callback_query(F.data == "menu")
 async def show_menu(call: CallbackQuery):
     await call.answer()
     await call.message.answer("Выбери действие.", reply_markup=kb_main_menu())
 
-
-# ── Мой профиль ──────────────────────────────────────────────────
 
 @router.message(F.text == "👁️ Профиль")
 async def show_my_profile_msg(message: Message, session: AsyncSession):
@@ -89,8 +78,6 @@ async def _send_profile(user_id: int, msg, session: AsyncSession):
     else:
         await msg.answer(text, reply_markup=kb_profile_actions(), parse_mode="HTML")
 
-
-# ── Редактировать профиль ────────────────────────────────────────
 
 @router.callback_query(F.data == "edit_profile")
 async def edit_profile_menu(call: CallbackQuery):
@@ -199,6 +186,20 @@ async def apply_edit_value(message: Message, state: FSMContext, session: AsyncSe
         await session.commit()
         await message.answer("✅ <b>Описание обновлено</b>", parse_mode="HTML", reply_markup=kb_main_menu())
 
+    elif field == "location":
+        # Ждём геолокацию (её ловит save_new_location по F.location).
+        # Сюда попадает только текст: либо "Пропустить →", либо мусор.
+        if (message.text or "").strip() == "Пропустить →":
+            await state.clear()
+            await message.answer("Без изменений геолокации.", reply_markup=remove_kb())
+            await message.answer("🌌 <b>Главное меню</b>", parse_mode="HTML", reply_markup=kb_main_menu())
+            return
+        await message.answer(
+            "📡  Нажми «📍 Поделиться геолокацией» или «Пропустить →».",
+            reply_markup=kb_location(),
+        )
+        return
+
     await state.clear()
 
 
@@ -212,8 +213,6 @@ async def collect_edit_photo(message: Message, state: FSMContext, session: Async
     await state.clear()
     await message.answer("Фото обновлено.", reply_markup=kb_main_menu())
 
-
-# ── Скрыть / Показать / Удалить ──────────────────────────────────
 
 @router.callback_query(F.data == "hide_profile")
 async def hide_profile(call: CallbackQuery, session: AsyncSession):
@@ -262,8 +261,6 @@ async def delete_profile(call: CallbackQuery, session: AsyncSession, state: FSMC
     await call.answer()
     await call.message.answer("Анкета удалена. Если захочешь вернуться — /start.")
 
-
-# ── Геолокация ───────────────────────────────────────────────────
 
 @router.callback_query(F.data == "update_location")
 async def ask_update_location(call: CallbackQuery, state: FSMContext):

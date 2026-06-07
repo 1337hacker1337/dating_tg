@@ -13,7 +13,7 @@ from db.repositories.user_repo import UserRepository
 _log = log.get(__name__)
 router = Router()
 
-_STEPS   = 6
+_STEPS   = 7
 _ERR_PHOTO = "⚠️  Ожидается фотография.\nОтправь фото, чтобы продолжить."
 
 
@@ -101,7 +101,7 @@ async def reg_bio_skip(call: CallbackQuery, state: FSMContext):
 
 async def _ask_location(message: Message, state: FSMContext):
     await message.answer(
-        f"{_progress(5)}\n\n📡  Геолокация\n<i>Необязательно. Используется для показа расстояния.</i>",
+        f"{_progress(6)}\n\n📡  Геолокация\n<i>Необязательно. Используется для показа расстояния.</i>",
         parse_mode="HTML", reply_markup=kb_location(),
     )
     await state.set_state(Registration.location)
@@ -123,7 +123,7 @@ async def reg_location_skip(message: Message, state: FSMContext):
 
 async def _ask_photo(message: Message, state: FSMContext):
     await message.answer(
-        f"{_progress(6)}\n\nФото профиля\n<i>Одна фотография — обязательно.</i>",
+        f"{_progress(7)}\n\nФото профиля\n<i>Одна фотография — обязательно.</i>",
         parse_mode="HTML",
     )
     await state.set_state(Registration.photos)
