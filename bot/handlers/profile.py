@@ -27,16 +27,10 @@ async def _profile_text(user: User, session) -> str:
     repo  = UserRepository(session)
     stats = await repo.get_profile_stats(user.id)
 
-    status = "активна" if user.is_active else "скрыта"
-    geo    = "📡 есть" if user.latitude is not None else "📡 нет"
-    gender = GENDER_MAP.get(user.gender.value, "—")
-    lf     = LF_MAP.get(user.looking_for.value, "—")
+    lines = [f"<b>{user.name}</b>, {user.age}"]
 
-    lines = [
-        f"<b>{user.name}</b>, {user.age}",
-        f"{gender}  ·  {lf}  ·  {status}  ·  {geo}",
-    ]
     if user.bio:
+        lines.append("")
         lines.append(f"<i>{user.bio}</i>")
 
     lines.append("")
@@ -47,6 +41,16 @@ async def _profile_text(user: User, session) -> str:
         f"🤮 <code>{stats['dislikes']}</code>  ·  "
         f"⚔️ <code>{stats['matches']}</code>"
     )
+
+    warnings = []
+    if not user.is_active:
+        warnings.append("скрыта")
+    if user.latitude is None:
+        warnings.append("гео не указана")
+    if warnings:
+        lines.append("")
+        lines.append("  ·  ".join(warnings))
+
     return "\n".join(lines)
 
 
@@ -178,7 +182,6 @@ async def apply_edit_value(message: Message, state: FSMContext, session: AsyncSe
 
     elif field == "age":
         txt = (message.text or "").strip()
-        # isdecimal — только 0-9, isdigit пропускает ² ٢
         if not txt.isdecimal() or not (14 <= int(txt) <= 99):
             await message.answer("↑ 14–99.")
             return
@@ -190,11 +193,14 @@ async def apply_edit_value(message: Message, state: FSMContext, session: AsyncSe
 
     elif field == "bio":
         val = (message.text or "").strip()
+        if not val:
+            await message.answer("↑ не может быть пустым.")
+            return
         if len(val) > 500:
             await message.answer("↑ не более 500.")
             return
         await session.execute(
-            update(User).where(User.id == message.from_user.id).values(bio=val or None)
+            update(User).where(User.id == message.from_user.id).values(bio=val)
         )
         await session.commit()
         await message.answer("о себе → ok", reply_markup=kb_main_menu())

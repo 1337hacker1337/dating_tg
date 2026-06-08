@@ -31,28 +31,43 @@ def _haversine_km(lat1, lon1, lat2, lon2) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
-def _profile_caption(candidate: User, viewer: User | None = None) -> str:
+async def _profile_caption(candidate: User, session: AsyncSession, viewer: User | None = None) -> str:
     header = f"<b>{candidate.name}</b>, {candidate.age}"
 
     if (
         viewer
-        and viewer.latitude   is not None and viewer.longitude   is not None
+        and viewer.latitude    is not None and viewer.longitude    is not None
         and candidate.latitude is not None and candidate.longitude is not None
     ):
         dist = round(_haversine_km(
             viewer.latitude, viewer.longitude,
             candidate.latitude, candidate.longitude,
         ), 1)
-        header += f"  ·  📡 {dist} км"
+        header += f"  ·  {dist} км"
 
-    lines = [header, format_rating_line(candidate.avg_rating, candidate.rating_count)]
+    lines = [header]
+
     if candidate.bio:
-        lines.append(f"\n<i>{candidate.bio}</i>")
+        lines.append("")
+        lines.append(f"<i>{candidate.bio}</i>")
+
+    likes    = round(candidate.avg_rating * candidate.rating_count)
+    dislikes = candidate.rating_count - likes
+    stats    = await UserRepository(session).get_profile_stats(candidate.id)
+
+    lines.append("")
+    lines.append(format_rating_line(candidate.avg_rating, candidate.rating_count))
+    lines.append("")
+    lines.append(
+        f"🩸 <code>{likes}</code>  ·  "
+        f"🤮 <code>{dislikes}</code>  ·  "
+        f"⚔️ <code>{stats['matches']}</code>"
+    )
     return "\n".join(lines)
 
 
-async def _send_card(user_id: int, bot: Bot, candidate: User, viewer: User | None = None) -> None:
-    caption = _profile_caption(candidate, viewer)
+async def _send_card(user_id: int, bot: Bot, candidate: User, session: AsyncSession, viewer: User | None = None) -> None:
+    caption = await _profile_caption(candidate, session, viewer)
     kb      = kb_swipe(candidate.id)
     if candidate.photos:
         await bot.send_photo(user_id, photo=candidate.photos[0].file_id,
@@ -95,7 +110,7 @@ async def show_next(
         )
         return
 
-    await _send_card(user_id, bot, candidate, viewer=viewer)
+    await _send_card(user_id, bot, candidate, session, viewer=viewer)
 
 
 # ── лента ────────────────────────────────────────────────────────
@@ -119,10 +134,10 @@ async def handle_like(call: CallbackQuery, bot: Bot, session: AsyncSession,
 
     if result.is_new_match and result.partner:
         _log.user("match: user=%s ↔ %s", call.from_user.id, candidate_id)
-        await _send_match_notification(call.from_user.id, result.partner, bot)
+        await _send_match_notification(call.from_user.id, result.partner, bot, session)
         viewer = db_user or await svc.users.get(call.from_user.id)
         if viewer:
-            await _send_match_notification(result.partner.id, viewer, bot,
+            await _send_match_notification(result.partner.id, viewer, bot, session,
                                            write_to=call.from_user.id)
     elif result.notify_like:
         await _notify_liked(candidate_id, bot)
@@ -183,12 +198,14 @@ async def _show_likes_page(
         await bot.send_message(user_id, "анкета удалена.")
         return
 
-    liker = await UserRepository(session).get(liker_id)
+    repo  = UserRepository(session)
+    liker = await repo.get(liker_id)
     if not liker:
         await bot.send_message(user_id, "анкета удалена.")
         return
 
-    caption = f"🩸  {page + 1} / {total}\n\n" + _profile_caption(liker)
+    viewer  = await repo.get(user_id)
+    caption = f"🩸  {page + 1} / {total}\n\n" + await _profile_caption(liker, session, viewer)
 
     builder = InlineKeyboardBuilder()
     if page > 0:
@@ -220,10 +237,10 @@ async def likes_react(call: CallbackQuery, bot: Bot, session: AsyncSession):
 
     if result.is_new_match and result.partner:
         _log.user("match: user=%s ↔ %s (from likes)", call.from_user.id, liker_id)
-        await _send_match_notification(call.from_user.id, result.partner, bot)
+        await _send_match_notification(call.from_user.id, result.partner, bot, session)
         viewer = await svc.users.get(call.from_user.id)
         if viewer:
-            await _send_match_notification(result.partner.id, viewer, bot,
+            await _send_match_notification(result.partner.id, viewer, bot, session,
                                            write_to=call.from_user.id)
 
     like_repo = LikeRepository(session)
@@ -280,7 +297,8 @@ async def _show_matches_page(
 
     page    = max(0, min(page, len(matches) - 1))
     partner = matches[page]
-    caption = f"⚔️  {page + 1} / {len(matches)}\n\n" + _profile_caption(partner)
+    viewer  = await UserRepository(session).get(user_id)
+    caption = f"⚔️  {page + 1} / {len(matches)}\n\n" + await _profile_caption(partner, session, viewer)
 
     builder = InlineKeyboardBuilder()
     if page > 0:
@@ -304,11 +322,12 @@ async def _show_matches_page(
 # ── уведомления ──────────────────────────────────────────────────
 
 async def _send_match_notification(
-    user_id: int, partner: User, bot: Bot, write_to: int | None = None,
+    user_id: int, partner: User, bot: Bot, session: AsyncSession,
+    write_to: int | None = None,
 ) -> None:
     target   = write_to or partner.id
     username = partner.username if not write_to else None
-    caption  = f"⚔️  мэтч.\n\n{_profile_caption(partner)}"
+    caption  = f"⚔️  мэтч.\n\n" + await _profile_caption(partner, session)
     kb       = kb_match(target, username=username)
     try:
         if partner.photos:

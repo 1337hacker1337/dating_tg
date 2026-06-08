@@ -5,7 +5,7 @@ from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.states import Registration
-from bot.keyboards import kb_gender, kb_looking_for, kb_skip, kb_location, kb_main_menu, remove_kb
+from bot.keyboards import kb_gender, kb_looking_for, kb_location, kb_main_menu, remove_kb
 from bot.services import ProfileService
 from bot import logger as log
 from db.repositories.user_repo import UserRepository
@@ -55,7 +55,6 @@ async def reg_name(message: Message, state: FSMContext):
 @router.message(Registration.age)
 async def reg_age(message: Message, state: FSMContext):
     text = (message.text or "").strip()
-    # isdecimal — только честные 0-9, isdigit пропускает ² ٢ и т.п.
     if not text.isdecimal() or not (14 <= int(text) <= 99):
         await message.answer("↑ 14–99.")
         return
@@ -78,8 +77,8 @@ async def reg_gender(call: CallbackQuery, state: FSMContext):
 async def reg_looking_for(call: CallbackQuery, state: FSMContext):
     await state.update_data(looking_for=call.data.split(":")[1])
     await call.message.edit_text(
-        f"{_progress(5)}\n\nо себе.\n<i>необязательно  ·  до 500</i>",
-        parse_mode="HTML", reply_markup=kb_skip(),
+        f"{_progress(5)}\n\nо себе.\n<i>до 500 символов</i>",
+        parse_mode="HTML",
     )
     await state.set_state(Registration.bio)
 
@@ -87,18 +86,14 @@ async def reg_looking_for(call: CallbackQuery, state: FSMContext):
 @router.message(Registration.bio)
 async def reg_bio_text(message: Message, state: FSMContext):
     bio = (message.text or "").strip()
+    if not bio:
+        await message.answer("↑ расскажи о себе.")
+        return
     if len(bio) > 500:
         await message.answer("↑ не более 500.")
         return
-    await state.update_data(bio=bio or None)
+    await state.update_data(bio=bio)
     await _ask_location(message, state)
-
-
-@router.callback_query(Registration.bio, F.data == "skip")
-async def reg_bio_skip(call: CallbackQuery, state: FSMContext):
-    await state.update_data(bio=None)
-    await call.message.delete()
-    await _ask_location(call.message, state)
 
 
 async def _ask_location(message: Message, state: FSMContext):

@@ -32,15 +32,9 @@ def get_tier(winrate: float) -> Tier:
     return TIERS[-1]
 
 
-def rating_bar(winrate: float, width: int = 8) -> str:
-    filled = round(winrate * width)
-    return f"[{'█' * filled}{'░' * (width - filled)}]"
-
-
 def format_rating_line(avg_rating: float, rating_count: int) -> str:
     if rating_count < MIN_VOTES:
         return f"🧬  калибровка  {rating_count}/{MIN_VOTES}"
     pct  = round(avg_rating * 100)
     tier = get_tier(avg_rating)
-    bar  = rating_bar(avg_rating)
-    return f"<code>{bar}</code>  {pct}%  {tier.emoji} {tier.slug}"
+    return f"{tier.emoji} {tier.slug}  ·  {pct}%"
