@@ -13,8 +13,7 @@ from db.repositories.user_repo import UserRepository
 _log = log.get(__name__)
 router = Router()
 
-_STEPS   = 7
-_ERR_PHOTO = "⚠️  Ожидается фотография.\nОтправь фото, чтобы продолжить."
+_STEPS = 7
 
 
 def _progress(step: int) -> str:
@@ -26,11 +25,11 @@ async def cmd_start(message: Message, state: FSMContext, session: AsyncSession):
     repo = UserRepository(session)
     if await repo.exists(message.from_user.id):
         await state.clear()
-        await message.answer("С возвращением.", reply_markup=kb_main_menu())
+        await message.answer("снова здесь.", reply_markup=kb_main_menu())
         return
 
     await message.answer(
-        f"SHROOM\n\n{_progress(1)}\n\nКак тебя зовут?\n<i>до 16 символов</i>",
+        f"SHROOM\n\n{_progress(1)}\n\nимя.\n<i>до 16 символов</i>",
         parse_mode="HTML", reply_markup=remove_kb(),
     )
     await state.set_state(Registration.name)
@@ -40,14 +39,14 @@ async def cmd_start(message: Message, state: FSMContext, session: AsyncSession):
 async def reg_name(message: Message, state: FSMContext):
     name = (message.text or "").strip()
     if not name:
-        await message.answer("⚠️  Имя не может быть пустым.")
+        await message.answer("↑ имя не может быть пустым.")
         return
     if len(name) > 16:
-        await message.answer(f"⚠️  Слишком длинно — {len(name)}/16.\nУкороти имя.")
+        await message.answer(f"↑ {len(name)}/16 — слишком длинно.")
         return
     await state.update_data(name=name)
     await message.answer(
-        f"{_progress(2)}\n\n<b>{name}</b>\n\nСколько тебе лет?  <i>14–99</i>",
+        f"{_progress(2)}\n\n<b>{name}</b>\n\nвозраст.  <i>14–99</i>",
         parse_mode="HTML",
     )
     await state.set_state(Registration.age)
@@ -56,19 +55,22 @@ async def reg_name(message: Message, state: FSMContext):
 @router.message(Registration.age)
 async def reg_age(message: Message, state: FSMContext):
     text = (message.text or "").strip()
-    if not text.isdigit() or not (14 <= int(text) <= 99):
-        await message.answer("⚠️  Введи число от 14 до 99.")
+    # isdecimal — только честные 0-9, isdigit пропускает ² ٢ и т.п.
+    if not text.isdecimal() or not (14 <= int(text) <= 99):
+        await message.answer("↑ 14–99.")
         return
     await state.update_data(age=int(text))
-    await message.answer(f"{_progress(3)}\n\nТвой пол:", parse_mode="HTML", reply_markup=kb_gender())
+    await message.answer(f"{_progress(3)}\n\nты —", parse_mode="HTML", reply_markup=kb_gender())
     await state.set_state(Registration.gender)
 
 
 @router.callback_query(Registration.gender, F.data.startswith("gender:"))
 async def reg_gender(call: CallbackQuery, state: FSMContext):
     await state.update_data(gender=call.data.split(":")[1])
-    await call.message.edit_text(f"{_progress(4)}\n\nКого ищешь?",
-                                 parse_mode="HTML", reply_markup=kb_looking_for())
+    await call.message.edit_text(
+        f"{_progress(4)}\n\nищешь —",
+        parse_mode="HTML", reply_markup=kb_looking_for(),
+    )
     await state.set_state(Registration.looking_for)
 
 
@@ -76,7 +78,7 @@ async def reg_gender(call: CallbackQuery, state: FSMContext):
 async def reg_looking_for(call: CallbackQuery, state: FSMContext):
     await state.update_data(looking_for=call.data.split(":")[1])
     await call.message.edit_text(
-        f"{_progress(5)}\n\nО себе\n<i>до 500 символов — необязательно</i>",
+        f"{_progress(5)}\n\nо себе.\n<i>необязательно  ·  до 500</i>",
         parse_mode="HTML", reply_markup=kb_skip(),
     )
     await state.set_state(Registration.bio)
@@ -86,7 +88,7 @@ async def reg_looking_for(call: CallbackQuery, state: FSMContext):
 async def reg_bio_text(message: Message, state: FSMContext):
     bio = (message.text or "").strip()
     if len(bio) > 500:
-        await message.answer("⚠️  Не более 500 символов.")
+        await message.answer("↑ не более 500.")
         return
     await state.update_data(bio=bio or None)
     await _ask_location(message, state)
@@ -101,7 +103,7 @@ async def reg_bio_skip(call: CallbackQuery, state: FSMContext):
 
 async def _ask_location(message: Message, state: FSMContext):
     await message.answer(
-        f"{_progress(6)}\n\n📡  Геолокация\n<i>Необязательно. Используется для показа расстояния.</i>",
+        f"{_progress(6)}\n\n📡  геолокация.\n<i>необязательно  ·  для расстояния</i>",
         parse_mode="HTML", reply_markup=kb_location(),
     )
     await state.set_state(Registration.location)
@@ -109,21 +111,24 @@ async def _ask_location(message: Message, state: FSMContext):
 
 @router.message(Registration.location, F.location)
 async def reg_location(message: Message, state: FSMContext):
-    await state.update_data(latitude=message.location.latitude, longitude=message.location.longitude)
-    await message.answer("📡  Геолокация сохранена.", reply_markup=remove_kb())
+    await state.update_data(
+        latitude=message.location.latitude,
+        longitude=message.location.longitude,
+    )
+    await message.answer("📡  сохранена.", reply_markup=remove_kb())
     await _ask_photo(message, state)
 
 
-@router.message(Registration.location, F.text == "Пропустить →")
+@router.message(Registration.location, F.text == "→ пропустить")
 async def reg_location_skip(message: Message, state: FSMContext):
     await state.update_data(latitude=None, longitude=None)
-    await message.answer("Без геолокации.", reply_markup=remove_kb())
+    await message.answer("без геолокации.", reply_markup=remove_kb())
     await _ask_photo(message, state)
 
 
 async def _ask_photo(message: Message, state: FSMContext):
     await message.answer(
-        f"{_progress(7)}\n\nФото профиля\n<i>Одна фотография — обязательно.</i>",
+        f"{_progress(7)}\n\nфото.\n<i>одно — обязательно</i>",
         parse_mode="HTML",
     )
     await state.set_state(Registration.photos)
@@ -153,10 +158,12 @@ async def reg_photo(message: Message, state: FSMContext, session: AsyncSession):
               message.from_user.id, message.from_user.username,
               data["name"], data["age"], data["gender"], data["looking_for"])
 
-    await message.answer(f"Анкета создана, <b>{data['name']}</b>.",
-                         parse_mode="HTML", reply_markup=kb_main_menu())
+    await message.answer(
+        f"готово, <b>{data['name']}</b>.\n\n<i>добро пожаловать в темноту.</i>",
+        parse_mode="HTML", reply_markup=kb_main_menu(),
+    )
 
 
 @router.message(Registration.photos)
 async def reg_photo_invalid(message: Message):
-    await message.answer(_ERR_PHOTO)
+    await message.answer("↑ ожидается фото.")

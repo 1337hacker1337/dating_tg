@@ -51,6 +51,9 @@ class User(Base):
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    notified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     photos:  Mapped[list["Photo"]]  = relationship(
         "Photo", back_populates="user", order_by="Photo.position"

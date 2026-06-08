@@ -8,3 +8,4 @@ python-dotenv
 aiofiles
 httpx
 pydantic-settings
+apscheduler==3.10.4

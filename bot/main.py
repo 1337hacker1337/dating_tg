@@ -6,6 +6,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot import logger as log
+from bot.notify import create_scheduler
 from config import settings
 from db.session import engine
 from db.models import Base
@@ -15,11 +16,20 @@ from bot.handlers import start, browse, profile, admin
 log.setup(log_dir="logs", debug=True)
 _log = log.get("bot.main")
 
+# Глобальный планировщик — создаём здесь, запускаем в on_startup
+_scheduler = None
+
 
 async def on_startup(bot: Bot) -> None:
+    global _scheduler
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     _log.info("БД готова")
+
+    _scheduler = create_scheduler(bot)
+    _scheduler.start()
+    _log.info("Планировщик нотифов запущен (интервал проверки: каждые 2ч, триггер: 48ч молчания)")
+
     if settings.use_webhook:
         url = f"{settings.webhook_host}{settings.webhook_path}"
         await bot.set_webhook(url)
@@ -27,6 +37,10 @@ async def on_startup(bot: Bot) -> None:
 
 
 async def on_shutdown(bot: Bot) -> None:
+    global _scheduler
+    if _scheduler and _scheduler.running:
+        _scheduler.shutdown(wait=False)
+        _log.info("Планировщик остановлен")
     if settings.use_webhook:
         await bot.delete_webhook()
     await engine.dispose()

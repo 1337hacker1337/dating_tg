@@ -1,3 +1,4 @@
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from sqlalchemy import select, update, delete, func, and_, or_, not_, exists, case
@@ -203,3 +204,45 @@ class UserRepository:
         q = q.order_by(User.registered_at.desc()).offset(offset).limit(limit)
         r = await self.session.execute(q)
         return list(r.scalars().all())
+
+    async def get_users_for_notify(
+        self,
+        inactive_hours: int = 48,
+        cooldown_hours: int = 48,
+    ) -> list[User]:
+        """
+        Юзеры которым нужно слать дейли-нотиф:
+          - активны, не забанены
+          - не заходили >= inactive_hours
+          - не получали нотиф в последние cooldown_hours (или вообще не получали)
+        Возвращает только id — не тянем фото.
+        """
+        now = datetime.now(tz=timezone.utc)
+        inactive_since = now - timedelta(hours=inactive_hours)
+        notified_since = now - timedelta(hours=cooldown_hours)
+
+        q = (
+            select(User.id)
+            .where(
+                User.is_active.is_(True),
+                User.is_banned.is_(False),
+                User.last_seen_at.isnot(None),
+                User.last_seen_at < inactive_since,
+                or_(
+                    User.notified_at.is_(None),
+                    User.notified_at < notified_since,
+                ),
+            )
+        )
+        r = await self.session.execute(q)
+        return [row[0] for row in r.fetchall()]
+
+    async def set_notified(self, user_ids: list[int]) -> None:
+        """Обновляем notified_at батчем."""
+        if not user_ids:
+            return
+        await self.session.execute(
+            update(User)
+            .where(User.id.in_(user_ids))
+            .values(notified_at=func.now())
+        )

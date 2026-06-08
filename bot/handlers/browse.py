@@ -1,5 +1,5 @@
 """
-bot/handlers/browse.py — лента / лайк / дизлайк / просмотр лайков / мэтчи.
+bot/handlers/browse.py — лента / лайк / дизлайк / лайки / мэтчи.
 """
 import math
 
@@ -36,7 +36,7 @@ def _profile_caption(candidate: User, viewer: User | None = None) -> str:
 
     if (
         viewer
-        and viewer.latitude  is not None and viewer.longitude  is not None
+        and viewer.latitude   is not None and viewer.longitude   is not None
         and candidate.latitude is not None and candidate.longitude is not None
     ):
         dist = round(_haversine_km(
@@ -80,7 +80,7 @@ async def show_next(
     if viewer is None:
         viewer = await repo.get(user_id)
     if viewer is None:
-        await bot.send_message(user_id, "Сначала создай анкету — /start")
+        await bot.send_message(user_id, "анкеты нет.\n\n/start")
         return
 
     candidate = await repo.get_next_candidate(
@@ -89,7 +89,7 @@ async def show_next(
     if candidate is None:
         await bot.send_message(
             user_id,
-            "Анкеты закончились.\n<i>Загляни позже.</i>",
+            "пусто.\n\n<i>загляни позже.</i>",
             parse_mode="HTML",
             reply_markup=kb_main_menu(),
         )
@@ -98,11 +98,15 @@ async def show_next(
     await _send_card(user_id, bot, candidate, viewer=viewer)
 
 
-@router.message(F.text == "🕯️ Лента")
+# ── лента ────────────────────────────────────────────────────────
+
+@router.message(F.text.in_({"🕯️ лента", "🕯️ Лента"}))
 async def handle_browse_msg(message: Message, bot: Bot, session: AsyncSession,
                             db_user: User | None = None):
     await show_next(message.from_user.id, bot, session, viewer=db_user)
 
+
+# ── лайк / дизлайк ───────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("like:"))
 async def handle_like(call: CallbackQuery, bot: Bot, session: AsyncSession,
@@ -133,13 +137,15 @@ async def handle_dislike(call: CallbackQuery, bot: Bot, session: AsyncSession,
     candidate_id = int(call.data.split(":")[1])
     svc = BrowseService(session)
     await svc.react(call.from_user.id, candidate_id, liked=False)
-    await call.answer("⚰️")
+    await call.answer("🤮")
     _log.user("dislike: user=%s → %s", call.from_user.id, candidate_id)
     await show_next(call.from_user.id, bot, session,
                     delete_msg_id=call.message.message_id, viewer=db_user)
 
 
-@router.message(F.text == "🩸 Лайки")
+# ── лайки ────────────────────────────────────────────────────────
+
+@router.message(F.text.in_({"🩸 лайки", "🩸 Лайки"}))
 async def show_likes_msg(message: Message, bot: Bot, session: AsyncSession):
     await _show_likes_page(message.from_user.id, bot, session, page=0)
 
@@ -168,18 +174,18 @@ async def _show_likes_page(
     like_repo = LikeRepository(session)
     total     = await like_repo.count_unanswered_likers(user_id)
     if total == 0:
-        await bot.send_message(user_id, "Новых лайков нет.")
+        await bot.send_message(user_id, "лайков нет.")
         return
 
-    page      = max(0, min(page, total - 1))
-    liker_id  = await like_repo.get_unanswered_liker_at(user_id, page)
+    page     = max(0, min(page, total - 1))
+    liker_id = await like_repo.get_unanswered_liker_at(user_id, page)
     if liker_id is None:
-        await bot.send_message(user_id, "Анкета удалена.")
+        await bot.send_message(user_id, "анкета удалена.")
         return
 
     liker = await UserRepository(session).get(liker_id)
     if not liker:
-        await bot.send_message(user_id, "Анкета удалена.")
+        await bot.send_message(user_id, "анкета удалена.")
         return
 
     caption = f"🩸  {page + 1} / {total}\n\n" + _profile_caption(liker)
@@ -190,7 +196,7 @@ async def _show_likes_page(
     builder.button(text=f"{page + 1}/{total}", callback_data="noop")
     if page < total - 1:
         builder.button(text="→", callback_data=f"likes_page:{page + 1}")
-    builder.button(text="⚰️", callback_data=f"likes_react:dislike:{liker.id}:{page}")
+    builder.button(text="🤮", callback_data=f"likes_react:dislike:{liker.id}:{page}")
     builder.button(text="🩸", callback_data=f"likes_react:like:{liker.id}:{page}")
     builder.adjust(3, 2)
 
@@ -210,7 +216,7 @@ async def likes_react(call: CallbackQuery, bot: Bot, session: AsyncSession):
 
     svc    = BrowseService(session)
     result = await svc.react(call.from_user.id, liker_id, liked=liked)
-    await call.answer("🩸" if liked else "⚰️")
+    await call.answer("🩸" if liked else "🤮")
 
     if result.is_new_match and result.partner:
         _log.user("match: user=%s ↔ %s (from likes)", call.from_user.id, liker_id)
@@ -227,7 +233,7 @@ async def likes_react(call: CallbackQuery, bot: Bot, session: AsyncSession):
             await bot.delete_message(call.from_user.id, call.message.message_id)
         except Exception:
             pass
-        await bot.send_message(call.from_user.id, "Все лайки обработаны.")
+        await bot.send_message(call.from_user.id, "всё.")
         return
 
     await _show_likes_page(
@@ -237,7 +243,9 @@ async def likes_react(call: CallbackQuery, bot: Bot, session: AsyncSession):
     )
 
 
-@router.message(F.text == "💬 Мэтчи")
+# ── мэтчи ────────────────────────────────────────────────────────
+
+@router.message(F.text.in_({"💬 мэтчи", "💬 Мэтчи"}))
 async def show_matches_msg(message: Message, bot: Bot, session: AsyncSession):
     await _show_matches_page(message.from_user.id, bot, session, page=0)
 
@@ -267,7 +275,7 @@ async def _show_matches_page(
     matches = await svc.get_matches(user_id)
 
     if not matches:
-        await bot.send_message(user_id, "Мэтчей пока нет.")
+        await bot.send_message(user_id, "мэтчей нет.")
         return
 
     page    = max(0, min(page, len(matches) - 1))
@@ -293,12 +301,14 @@ async def _show_matches_page(
         await bot.send_message(user_id, caption, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
+# ── уведомления ──────────────────────────────────────────────────
+
 async def _send_match_notification(
     user_id: int, partner: User, bot: Bot, write_to: int | None = None,
 ) -> None:
     target   = write_to or partner.id
     username = partner.username if not write_to else None
-    caption  = f"⚔️  Мэтч\n\n{_profile_caption(partner)}"
+    caption  = f"⚔️  мэтч.\n\n{_profile_caption(partner)}"
     kb       = kb_match(target, username=username)
     try:
         if partner.photos:
@@ -314,7 +324,7 @@ async def _notify_liked(user_id: int, bot: Bot) -> None:
     try:
         await bot.send_message(
             user_id,
-            "🩸  Кто-то лайкнул тебя.\n<i>Загляни во вкладку Лайки.</i>",
+            "🩸  тебя лайкнули.\n<i>загляни в лайки.</i>",
             parse_mode="HTML",
         )
     except Exception as e:
@@ -328,4 +338,4 @@ async def noop(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("try_write:"))
 async def try_write(call: CallbackQuery):
-    await call.answer("Закрытые настройки приватности.", show_alert=True)
+    await call.answer("закрытый профиль.", show_alert=True)

@@ -1,5 +1,5 @@
 """
-bot/handlers/admin.py — Telegram-админ панель. Доступ — только через таблицу admins.
+bot/handlers/admin.py — Telegram-админ панель.
 """
 import asyncio
 
@@ -34,47 +34,43 @@ async def _stats_text(session: AsyncSession) -> str:
     total  = await repo.count_total()
     active = await repo.count_active()
     banned = await repo.count_banned()
-    likes_r   = await session.execute(select(func.count()).select_from(Like).where(Like.value.is_(True)))
+    likes_r   = await session.execute(
+        select(func.count()).select_from(Like).where(Like.value.is_(True))
+    )
     matches_r = await session.execute(select(func.count()).select_from(Match))
     return (
-        "<b>📊 Статистика</b>\n\n"
-        f"├ 👥 Всего юзеров:   <code>{total}</code>\n"
-        f"├ ✅ Активных:        <code>{active}</code>\n"
-        f"├ 🚷 Забанено:        <code>{banned}</code>\n"
-        f"├ 🩸 Лайков всего:    <code>{likes_r.scalar()}</code>\n"
-        f"└ ⚔️  Мэтчей всего:   <code>{matches_r.scalar()}</code>"
+        "<b>📊 статистика</b>\n\n"
+        f"👥 <code>{total}</code>  ·  ✅ <code>{active}</code>  ·  🚷 <code>{banned}</code>\n\n"
+        f"🩸 <code>{likes_r.scalar()}</code>  ·  ⚔️ <code>{matches_r.scalar()}</code>"
     )
 
 
 async def _user_card(user: User, session: AsyncSession) -> str:
     repo  = UserRepository(session)
     stats = await repo.get_profile_stats(user.id)
-    status  = "🚷 ЗАБАНЕН" if user.is_banned else ("✅ активен" if user.is_active else "🙈 скрыт")
+    status  = "🚷 забанен" if user.is_banned else ("✅ активен" if user.is_active else "🙈 скрыт")
     geo     = (
         f"{user.latitude:.4f}, {user.longitude:.4f}"
         if user.latitude is not None and user.longitude is not None
-        else "не указана"
+        else "нет"
     )
     mention = f"@{user.username}" if user.username else "нет username"
     return (
-        f"<b>👤 Анкета #{user.id}</b>\n\n"
-        f"├ Имя:        <b>{user.name}</b>, {user.age}\n"
-        f"├ Telegram:   <code>{user.id}</code> · {mention}\n"
-        f"├ Пол:        {user.gender.value}\n"
-        f"├ Ищет:       {user.looking_for.value}\n"
-        f"├ Статус:     {status}\n"
-        f"├ Геолокация: {geo}\n"
-        f"├ Рейтинг:    {format_rating_line(user.avg_rating, user.rating_count)}\n"
-        f"├ 🩸 Лайков:   <code>{stats['likes']}</code>\n"
-        f"├ ⚰️ Дизов:    <code>{stats['dislikes']}</code>\n"
-        f"└ ⚔️ Мэтчей:   <code>{stats['matches']}</code>"
+        f"<b>#{user.id}</b>  <b>{user.name}</b>, {user.age}\n"
+        f"<code>{user.id}</code>  ·  {mention}\n"
+        f"{user.gender.value}  ·  {user.looking_for.value}  ·  {status}\n"
+        f"📡 {geo}\n\n"
+        f"{format_rating_line(user.avg_rating, user.rating_count)}\n\n"
+        f"🩸 <code>{stats['likes']}</code>  ·  "
+        f"🤮 <code>{stats['dislikes']}</code>  ·  "
+        f"⚔️ <code>{stats['matches']}</code>"
     )
 
 
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("👑 <b>Панель администратора</b>",
+    await message.answer("👑 <b>панель администратора</b>",
                          parse_mode="HTML", reply_markup=kb_admin_main())
     _log.user("admin panel opened: user=%s", message.from_user.id)
 
@@ -84,10 +80,10 @@ async def adm_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.answer()
     try:
-        await call.message.edit_text("👑 <b>Панель администратора</b>",
+        await call.message.edit_text("👑 <b>панель администратора</b>",
                                      parse_mode="HTML", reply_markup=kb_admin_main())
     except Exception:
-        await call.message.answer("👑 <b>Панель администратора</b>",
+        await call.message.answer("👑 <b>панель администратора</b>",
                                   parse_mode="HTML", reply_markup=kb_admin_main())
 
 
@@ -104,7 +100,7 @@ async def adm_stats(call: CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data == "adm:lookup")
 async def adm_lookup_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    await call.message.answer("🔍 Введи <b>Telegram ID</b> пользователя:",
+    await call.message.answer("🔍 telegram ID пользователя:",
                                parse_mode="HTML", reply_markup=kb_admin_back())
     await state.set_state(AdminLookup.waiting_id)
     await state.update_data(add_admin_mode=False)
@@ -113,7 +109,7 @@ async def adm_lookup_start(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "adm:add_admin")
 async def adm_add_admin_prompt(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    await call.message.answer("➕ Введи <b>Telegram ID</b> нового администратора:",
+    await call.message.answer("➕ telegram ID нового администратора:",
                                parse_mode="HTML", reply_markup=kb_admin_back())
     await state.set_state(AdminLookup.waiting_id)
     await state.update_data(add_admin_mode=True)
@@ -123,7 +119,7 @@ async def adm_add_admin_prompt(call: CallbackQuery, state: FSMContext):
 async def adm_lookup_handler(message: Message, state: FSMContext, session: AsyncSession):
     raw = (message.text or "").strip()
     if not raw.lstrip("-").isdigit():
-        await message.answer("⚠️ Нужен числовой ID.")
+        await message.answer("↑ числовой ID.")
         return
 
     data      = await state.get_data()
@@ -131,23 +127,23 @@ async def adm_lookup_handler(message: Message, state: FSMContext, session: Async
     target_id = int(raw)
     await state.clear()
 
-    repo      = UserRepository(session)
-    user      = await repo.get(target_id)
+    repo = UserRepository(session)
+    user = await repo.get(target_id)
 
     if add_mode:
         admin_repo = AdminRepository(session)
         if await admin_repo.is_admin(target_id):
-            await message.answer("ℹ️ Уже администратор.", reply_markup=kb_admin_back())
+            await message.answer("уже администратор.", reply_markup=kb_admin_back())
             return
         username = user.username if user else None
         await admin_repo.add(telegram_id=target_id, username=username)
         await session.commit()
         _log.user("admin add_admin: admin=%s new=%s", message.from_user.id, target_id)
-        await message.answer(f"✅ <code>{target_id}</code> добавлен как администратор.",
+        await message.answer(f"✅ <code>{target_id}</code> добавлен.",
                              parse_mode="HTML", reply_markup=kb_admin_back())
     else:
         if user is None:
-            await message.answer("❌ Пользователь не найден.", reply_markup=kb_admin_back())
+            await message.answer("не найдено.", reply_markup=kb_admin_back())
             return
         text = await _user_card(user, session)
         kb   = kb_admin_user_actions(user.id, user.is_banned)
@@ -162,7 +158,7 @@ async def adm_lookup_handler(message: Message, state: FSMContext, session: Async
 @router.callback_query(F.data == "adm:ban")
 async def adm_ban_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    await call.message.answer("🚷 Введи <b>Telegram ID</b> для бана:",
+    await call.message.answer("🚷 telegram ID для бана:",
                                parse_mode="HTML", reply_markup=kb_admin_back())
     await state.set_state(AdminBan.waiting_id)
 
@@ -171,7 +167,7 @@ async def adm_ban_start(call: CallbackQuery, state: FSMContext):
 async def adm_ban_exec(message: Message, state: FSMContext, session: AsyncSession):
     raw = (message.text or "").strip()
     if not raw.lstrip("-").isdigit():
-        await message.answer("⚠️ Нужен числовой ID.")
+        await message.answer("↑ числовой ID.")
         return
     await _do_ban(int(raw), message.from_user.id, session, message)
     await state.clear()
@@ -187,22 +183,22 @@ async def _do_ban(target_id: int, admin_id: int, session: AsyncSession, reply_to
     repo = UserRepository(session)
     user = await repo.get_light(target_id)
     if user is None:
-        await reply_to.answer("❌ Пользователь не найден.", reply_markup=kb_admin_back())
+        await reply_to.answer("не найдено.", reply_markup=kb_admin_back())
         return
     if user.is_banned:
-        await reply_to.answer("ℹ️ Уже забанен.", reply_markup=kb_admin_back())
+        await reply_to.answer("уже забанен.", reply_markup=kb_admin_back())
         return
     await repo.set_banned(target_id, True)
     await session.commit()
     _log.user("admin ban: admin=%s target=%s", admin_id, target_id)
-    await reply_to.answer(f"🚷 Пользователь <code>{target_id}</code> забанен.",
+    await reply_to.answer(f"🚷 <code>{target_id}</code> забанен.",
                           parse_mode="HTML", reply_markup=kb_admin_back())
 
 
 @router.callback_query(F.data == "adm:unban")
 async def adm_unban_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    await call.message.answer("✅ Введи <b>Telegram ID</b> для разбана:",
+    await call.message.answer("✅ telegram ID для разбана:",
                                parse_mode="HTML", reply_markup=kb_admin_back())
     await state.set_state(AdminUnban.waiting_id)
 
@@ -211,7 +207,7 @@ async def adm_unban_start(call: CallbackQuery, state: FSMContext):
 async def adm_unban_exec(message: Message, state: FSMContext, session: AsyncSession):
     raw = (message.text or "").strip()
     if not raw.lstrip("-").isdigit():
-        await message.answer("⚠️ Нужен числовой ID.")
+        await message.answer("↑ числовой ID.")
         return
     await _do_unban(int(raw), message.from_user.id, session, message)
     await state.clear()
@@ -227,15 +223,15 @@ async def _do_unban(target_id: int, admin_id: int, session: AsyncSession, reply_
     repo = UserRepository(session)
     user = await repo.get_light(target_id)
     if user is None:
-        await reply_to.answer("❌ Пользователь не найден.", reply_markup=kb_admin_back())
+        await reply_to.answer("не найдено.", reply_markup=kb_admin_back())
         return
     if not user.is_banned:
-        await reply_to.answer("ℹ️ Пользователь не забанен.", reply_markup=kb_admin_back())
+        await reply_to.answer("не забанен.", reply_markup=kb_admin_back())
         return
     await repo.set_banned(target_id, False)
     await session.commit()
     _log.user("admin unban: admin=%s target=%s", admin_id, target_id)
-    await reply_to.answer(f"✅ Пользователь <code>{target_id}</code> разбанен.",
+    await reply_to.answer(f"✅ <code>{target_id}</code> разбанен.",
                           parse_mode="HTML", reply_markup=kb_admin_back())
 
 
@@ -243,7 +239,7 @@ async def _do_unban(target_id: int, admin_id: int, session: AsyncSession, reply_
 async def adm_broadcast_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.answer(
-        "📣 Введи текст рассылки.\n<i>Поддерживается HTML-разметка.</i>",
+        "📣 текст рассылки.  <i>поддерживается HTML</i>",
         parse_mode="HTML", reply_markup=kb_admin_back(),
     )
     await state.set_state(AdminBroadcast.waiting_text)
@@ -253,18 +249,19 @@ async def adm_broadcast_start(call: CallbackQuery, state: FSMContext):
 async def adm_broadcast_preview(message: Message, state: FSMContext):
     text = message.text or message.caption or ""
     if not text.strip():
-        await message.answer("⚠️ Текст не может быть пустым.")
+        await message.answer("↑ текст не может быть пустым.")
         return
     await state.update_data(broadcast_text=text)
     await message.answer(
-        f"<b>Предпросмотр:</b>\n\n{text}\n\nОтправить всем активным пользователям?",
+        f"<b>предпросмотр:</b>\n\n{text}\n\nотправить всем активным?",
         parse_mode="HTML", reply_markup=kb_admin_confirm("broadcast"),
     )
     await state.set_state(AdminBroadcast.confirm)
 
 
 @router.callback_query(F.data == "adm:confirm:broadcast", AdminBroadcast.confirm)
-async def adm_broadcast_exec(call: CallbackQuery, state: FSMContext, bot: Bot, session: AsyncSession):
+async def adm_broadcast_exec(call: CallbackQuery, state: FSMContext, bot: Bot,
+                              session: AsyncSession):
     data = await state.get_data()
     text = data.get("broadcast_text", "")
     await state.clear()
@@ -274,8 +271,7 @@ async def adm_broadcast_exec(call: CallbackQuery, state: FSMContext, bot: Bot, s
         select(User.id).where(User.is_active.is_(True), User.is_banned.is_(False))
     )
     user_ids = [row[0] for row in result.fetchall()]
-
-    await call.message.answer(f"⏳ Отправляю {len(user_ids)} пользователям...", parse_mode="HTML")
+    await call.message.answer(f"⏳ {len(user_ids)} получателей...", parse_mode="HTML")
 
     ok = fail = 0
     for uid in user_ids:
@@ -288,7 +284,7 @@ async def adm_broadcast_exec(call: CallbackQuery, state: FSMContext, bot: Bot, s
 
     _log.user("admin broadcast: admin=%s sent=%d fail=%d", call.from_user.id, ok, fail)
     await call.message.answer(
-        f"✅ Рассылка завершена.\n├ Доставлено: <code>{ok}</code>\n└ Ошибок: <code>{fail}</code>",
+        f"готово.\n✅ <code>{ok}</code>  ·  ✗ <code>{fail}</code>",
         parse_mode="HTML", reply_markup=kb_admin_back(),
     )
 
@@ -297,7 +293,7 @@ async def adm_broadcast_exec(call: CallbackQuery, state: FSMContext, bot: Bot, s
 async def adm_cal_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.answer(
-        "🧬 <b>Калибровка рейтинга</b>\n\nВведи <b>Telegram ID</b> пользователя:",
+        "🧬 <b>калибровка</b>  — telegram ID:",
         parse_mode="HTML", reply_markup=kb_admin_back(),
     )
     await state.set_state(AdminCalibration.waiting_id)
@@ -307,21 +303,20 @@ async def adm_cal_start(call: CallbackQuery, state: FSMContext):
 async def adm_cal_user(message: Message, state: FSMContext, session: AsyncSession):
     raw = (message.text or "").strip()
     if not raw.lstrip("-").isdigit():
-        await message.answer("⚠️ Нужен числовой ID.")
+        await message.answer("↑ числовой ID.")
         return
     user_id = int(raw)
     repo    = UserRepository(session)
     user    = await repo.get_light(user_id)
     if user is None:
-        await message.answer("❌ Пользователь не найден.", reply_markup=kb_admin_back())
+        await message.answer("не найдено.", reply_markup=kb_admin_back())
         await state.clear()
         return
     await state.update_data(cal_target_id=user_id)
     await message.answer(
-        f"Юзер: <b>{user.name}</b> (<code>{user_id}</code>)\n"
-        f"Текущий рейтинг: {format_rating_line(user.avg_rating, user.rating_count)}\n\n"
-        "Введи новое значение <b>rating_count</b> (число голосов).\n"
-        "<i>0 — полный сброс в калибровку.</i>",
+        f"<b>{user.name}</b>  <code>{user_id}</code>\n"
+        f"{format_rating_line(user.avg_rating, user.rating_count)}\n\n"
+        "новый <b>rating_count</b>.\n<i>0 — полный сброс</i>",
         parse_mode="HTML", reply_markup=kb_admin_back(),
     )
     await state.set_state(AdminCalibration.waiting_votes)
@@ -331,18 +326,20 @@ async def adm_cal_user(message: Message, state: FSMContext, session: AsyncSessio
 async def adm_cal_apply(message: Message, state: FSMContext, session: AsyncSession):
     raw = (message.text or "").strip()
     if not raw.isdigit():
-        await message.answer("⚠️ Введи неотрицательное целое число.")
+        await message.answer("↑ неотрицательное число.")
         return
     data      = await state.get_data()
     target_id = data["cal_target_id"]
     new_count = int(raw)
-    await session.execute(update(User).where(User.id == target_id).values(rating_count=new_count))
+    await session.execute(
+        update(User).where(User.id == target_id).values(rating_count=new_count)
+    )
     await session.commit()
     await state.clear()
     _log.user("admin calibration: admin=%s target=%s new_count=%d",
               message.from_user.id, target_id, new_count)
     await message.answer(
-        f"✅ <code>rating_count</code> для <code>{target_id}</code> → <code>{new_count}</code>.",
+        f"🧬 <code>{target_id}</code>  →  <code>{new_count}</code>",
         parse_mode="HTML", reply_markup=kb_admin_back(),
     )
 
@@ -350,9 +347,11 @@ async def adm_cal_apply(message: Message, state: FSMContext, session: AsyncSessi
 @router.callback_query(F.data.startswith("adm:do_reset_cal:"))
 async def adm_reset_cal_inline(call: CallbackQuery, session: AsyncSession):
     target_id = int(call.data.split(":")[2])
-    await session.execute(update(User).where(User.id == target_id).values(rating_count=0, avg_rating=0.0))
+    await session.execute(
+        update(User).where(User.id == target_id).values(rating_count=0, avg_rating=0.0)
+    )
     await session.commit()
-    await call.answer("🧬 Калибровка сброшена.", show_alert=True)
+    await call.answer("🧬 сброшено.", show_alert=True)
     _log.user("admin reset_cal inline: admin=%s target=%s", call.from_user.id, target_id)
 
 
@@ -361,11 +360,11 @@ async def adm_admins_list(call: CallbackQuery, session: AsyncSession):
     await call.answer()
     repo   = AdminRepository(session)
     admins = await repo.list_all()
-    lines  = ["<b>👑 Администраторы</b>\n"]
+    lines  = ["<b>👑 администраторы</b>\n"]
     for a in admins:
         label = f"@{a.username}" if a.username else str(a.telegram_id)
-        lines.append(f"├ <code>{a.telegram_id}</code> · {label}")
-    text = "\n".join(lines) if admins else "Список пуст."
+        lines.append(f"<code>{a.telegram_id}</code>  ·  {label}")
+    text = "\n".join(lines) if admins else "список пуст."
     try:
         await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb_admins_list(admins))
     except Exception:
@@ -376,20 +375,20 @@ async def adm_admins_list(call: CallbackQuery, session: AsyncSession):
 async def adm_remove_admin(call: CallbackQuery, session: AsyncSession):
     target_id = int(call.data.split(":")[2])
     if target_id == call.from_user.id:
-        await call.answer("⚠️ Нельзя удалить самого себя.", show_alert=True)
+        await call.answer("нельзя удалить себя.", show_alert=True)
         return
     repo = AdminRepository(session)
     await repo.remove(target_id)
     await session.commit()
-    await call.answer(f"Администратор {target_id} удалён.", show_alert=True)
+    await call.answer(f"{target_id} удалён.", show_alert=True)
     _log.user("admin rm_admin: admin=%s removed=%s", call.from_user.id, target_id)
 
     admins = await repo.list_all()
-    lines  = ["<b>👑 Администраторы</b>\n"]
+    lines  = ["<b>👑 администраторы</b>\n"]
     for a in admins:
         label = f"@{a.username}" if a.username else str(a.telegram_id)
-        lines.append(f"├ <code>{a.telegram_id}</code> · {label}")
-    text = "\n".join(lines) if admins else "Список пуст."
+        lines.append(f"<code>{a.telegram_id}</code>  ·  {label}")
+    text = "\n".join(lines) if admins else "список пуст."
     try:
         await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb_admins_list(admins))
     except Exception:
