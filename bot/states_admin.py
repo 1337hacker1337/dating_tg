@@ -17,3 +17,6 @@ class AdminBroadcast(StatesGroup):
 class AdminCalibration(StatesGroup):
     waiting_id    = State()
     waiting_votes = State()
+
+class AdminAdChannel(StatesGroup):
+    waiting_channel = State()

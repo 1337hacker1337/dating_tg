@@ -2,6 +2,7 @@
 bot/handlers/admin.py — Telegram-админ панель.
 """
 import asyncio
+from datetime import datetime, timezone
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
@@ -14,11 +15,17 @@ from bot import logger as log
 from bot.keyboards_admin import (
     kb_admin_main, kb_admin_back, kb_admin_confirm,
     kb_admin_user_actions, kb_admins_list,
+    kb_ad_channel, kb_ad_timer,
 )
 from bot.middlewares.admin_guard import AdminMiddleware
-from bot.states_admin import AdminBan, AdminUnban, AdminLookup, AdminBroadcast, AdminCalibration
+from bot.states_admin import (
+    AdminBan, AdminUnban, AdminLookup, AdminBroadcast,
+    AdminCalibration, AdminAdChannel,
+)
+from config import settings
 from db.models import User, Like, Match
 from db.repositories.admin_repo import AdminRepository
+from db.repositories.settings_repo import SettingsRepository
 from db.repositories.user_repo import UserRepository
 from bot.rating import format_rating_line
 
@@ -28,6 +35,10 @@ router = Router(name="admin")
 router.message.middleware(AdminMiddleware())
 router.callback_query.middleware(AdminMiddleware())
 
+
+# ════════════════════════════════════════════════════════════════
+# Вспомогательные
+# ════════════════════════════════════════════════════════════════
 
 async def _stats_text(session: AsyncSession) -> str:
     repo = UserRepository(session)
@@ -67,6 +78,62 @@ async def _user_card(user: User, session: AsyncSession) -> str:
     )
 
 
+def _fmt_expires(expires: datetime | None) -> str:
+    """Форматирует время истечения в читаемый вид с остатком."""
+    if expires is None:
+        return "постоянно ♾"
+    now = datetime.now(tz=timezone.utc)
+    if now >= expires:
+        return "истёк ❌"
+    delta = expires - now
+    total_minutes = int(delta.total_seconds() // 60)
+    days    = total_minutes // 1440
+    hours   = (total_minutes % 1440) // 60
+    minutes = total_minutes % 60
+    parts = []
+    if days:    parts.append(f"{days}д")
+    if hours:   parts.append(f"{hours}ч")
+    if minutes: parts.append(f"{minutes}м")
+    remaining = " ".join(parts) or "< 1м"
+    ts = expires.strftime("%d.%m.%Y %H:%M UTC")
+    return f"{ts}  (осталось {remaining})"
+
+
+async def _ad_channel_text(session: AsyncSession, bot: Bot) -> str:
+    repo       = SettingsRepository(session)
+    ad_channel = await repo.get_ad_channel()
+    ad_expires = await repo.get_ad_expires()
+    own        = settings.own_channel_id
+
+    lines = ["<b>📢 управление рекламой</b>\n"]
+
+    # Свой канал
+    if own:
+        lines.append(f"🏠 свой канал:  <code>{own}</code>  <i>(постоянно, из .env)</i>")
+    else:
+        lines.append("🏠 свой канал:  <i>не настроен</i>")
+
+    # Рекламный канал
+    if ad_channel:
+        try:
+            chat  = await bot.get_chat(ad_channel)
+            title = chat.title or ad_channel
+            lines.append(f"📢 рекламный:   <code>{ad_channel}</code>  «{title}»")
+        except Exception:
+            lines.append(f"📢 рекламный:   <code>{ad_channel}</code>")
+        lines.append(f"⏱ таймер:       {_fmt_expires(ad_expires)}")
+    else:
+        lines.append("📢 рекламный:   <i>не установлен</i>")
+
+    lines.append("")
+    lines.append("<i>бот должен быть администратором в каналах.</i>")
+    return "\n".join(lines)
+
+
+# ════════════════════════════════════════════════════════════════
+# /admin — вход
+# ════════════════════════════════════════════════════════════════
+
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, state: FSMContext):
     await state.clear()
@@ -87,6 +154,10 @@ async def adm_menu(call: CallbackQuery, state: FSMContext):
                                   parse_mode="HTML", reply_markup=kb_admin_main())
 
 
+# ════════════════════════════════════════════════════════════════
+# 📊 Статистика
+# ════════════════════════════════════════════════════════════════
+
 @router.callback_query(F.data == "adm:stats")
 async def adm_stats(call: CallbackQuery, session: AsyncSession):
     await call.answer()
@@ -96,6 +167,10 @@ async def adm_stats(call: CallbackQuery, session: AsyncSession):
     except Exception:
         await call.message.answer(text, parse_mode="HTML", reply_markup=kb_admin_back())
 
+
+# ════════════════════════════════════════════════════════════════
+# 👤 Найти юзера / ➕ Добавить админа
+# ════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "adm:lookup")
 async def adm_lookup_start(call: CallbackQuery, state: FSMContext):
@@ -154,6 +229,10 @@ async def adm_lookup_handler(message: Message, state: FSMContext, session: Async
             await message.answer(text, reply_markup=kb, parse_mode="HTML")
         _log.user("admin lookup: admin=%s target=%s", message.from_user.id, target_id)
 
+
+# ════════════════════════════════════════════════════════════════
+# 🚷 Бан / ✅ Разбан
+# ════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "adm:ban")
 async def adm_ban_start(call: CallbackQuery, state: FSMContext):
@@ -235,6 +314,10 @@ async def _do_unban(target_id: int, admin_id: int, session: AsyncSession, reply_
                           parse_mode="HTML", reply_markup=kb_admin_back())
 
 
+# ════════════════════════════════════════════════════════════════
+# 📣 Рассылка
+# ════════════════════════════════════════════════════════════════
+
 @router.callback_query(F.data == "adm:broadcast")
 async def adm_broadcast_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
@@ -266,13 +349,11 @@ async def adm_broadcast_exec(call: CallbackQuery, state: FSMContext, bot: Bot,
     text = data.get("broadcast_text", "")
     await state.clear()
     await call.answer()
-
     result   = await session.execute(
         select(User.id).where(User.is_active.is_(True), User.is_banned.is_(False))
     )
     user_ids = [row[0] for row in result.fetchall()]
     await call.message.answer(f"⏳ {len(user_ids)} получателей...", parse_mode="HTML")
-
     ok = fail = 0
     for uid in user_ids:
         try:
@@ -281,13 +362,16 @@ async def adm_broadcast_exec(call: CallbackQuery, state: FSMContext, bot: Bot,
         except Exception:
             fail += 1
         await asyncio.sleep(0.05)
-
     _log.user("admin broadcast: admin=%s sent=%d fail=%d", call.from_user.id, ok, fail)
     await call.message.answer(
         f"готово.\n✅ <code>{ok}</code>  ·  ✗ <code>{fail}</code>",
         parse_mode="HTML", reply_markup=kb_admin_back(),
     )
 
+
+# ════════════════════════════════════════════════════════════════
+# 🧬 Калибровка
+# ════════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data == "adm:calibration")
 async def adm_cal_start(call: CallbackQuery, state: FSMContext):
@@ -355,6 +439,10 @@ async def adm_reset_cal_inline(call: CallbackQuery, session: AsyncSession):
     _log.user("admin reset_cal inline: admin=%s target=%s", call.from_user.id, target_id)
 
 
+# ════════════════════════════════════════════════════════════════
+# 👑 Администраторы
+# ════════════════════════════════════════════════════════════════
+
 @router.callback_query(F.data == "adm:admins")
 async def adm_admins_list(call: CallbackQuery, session: AsyncSession):
     await call.answer()
@@ -382,7 +470,6 @@ async def adm_remove_admin(call: CallbackQuery, session: AsyncSession):
     await session.commit()
     await call.answer(f"{target_id} удалён.", show_alert=True)
     _log.user("admin rm_admin: admin=%s removed=%s", call.from_user.id, target_id)
-
     admins = await repo.list_all()
     lines  = ["<b>👑 администраторы</b>\n"]
     for a in admins:
@@ -393,3 +480,131 @@ async def adm_remove_admin(call: CallbackQuery, session: AsyncSession):
         await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb_admins_list(admins))
     except Exception:
         await call.message.answer(text, parse_mode="HTML", reply_markup=kb_admins_list(admins))
+
+
+# ════════════════════════════════════════════════════════════════
+# 📢 Рекламный канал + ⏱ Таймер
+# ════════════════════════════════════════════════════════════════
+
+async def _show_ad_menu(target, session: AsyncSession, bot: Bot) -> None:
+    """target — CallbackQuery или Message."""
+    repo       = SettingsRepository(session)
+    ad_channel = await repo.get_ad_channel()
+    ad_expires = await repo.get_ad_expires()
+    text       = await _ad_channel_text(session, bot)
+    kb         = kb_ad_channel(bool(ad_channel), ad_expires is not None)
+    if isinstance(target, CallbackQuery):
+        try:
+            await target.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            await target.message.answer(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await target.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "adm:ad_channel")
+async def adm_ad_channel_menu(call: CallbackQuery, session: AsyncSession, bot: Bot):
+    await call.answer()
+    await _show_ad_menu(call, session, bot)
+
+
+# ── Установить канал ─────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm:ad_set")
+async def adm_ad_set_prompt(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await call.message.answer(
+        "📢 @username или числовой ID канала.\n"
+        "<i>бот должен быть администратором в канале.</i>",
+        parse_mode="HTML", reply_markup=kb_admin_back(),
+    )
+    await state.set_state(AdminAdChannel.waiting_channel)
+
+
+@router.message(AdminAdChannel.waiting_channel)
+async def adm_ad_set_exec(message: Message, state: FSMContext,
+                           session: AsyncSession, bot: Bot):
+    raw = (message.text or "").strip()
+    if not raw:
+        await message.answer("↑ введи @username или ID.")
+        return
+
+    channel_id = raw if raw.startswith("@") or raw.lstrip("-").isdigit() else f"@{raw}"
+
+    try:
+        chat  = await bot.get_chat(channel_id)
+        title = chat.title or channel_id
+    except Exception as e:
+        await message.answer(
+            f"❌ не удалось получить канал <code>{channel_id}</code>.\n"
+            f"<i>убедись что бот добавлен как администратор.</i>\n\n"
+            f"ошибка: <code>{e}</code>",
+            parse_mode="HTML", reply_markup=kb_admin_back(),
+        )
+        return
+
+    repo = SettingsRepository(session)
+    await repo.set_ad_channel(channel_id)
+    await session.commit()
+    await state.clear()
+
+    _log.user("admin ad_channel set: admin=%s channel=%s", message.from_user.id, channel_id)
+    await message.answer(
+        f"✅ канал установлен: <b>{title}</b>  <code>{channel_id}</code>\n\n"
+        f"теперь задай срок действия через ⏱ таймер.",
+        parse_mode="HTML", reply_markup=kb_admin_back(),
+    )
+
+
+# ── Таймер ───────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm:ad_timer")
+async def adm_ad_timer_menu(call: CallbackQuery, session: AsyncSession):
+    await call.answer()
+    repo    = SettingsRepository(session)
+    expires = await repo.get_ad_expires()
+    text    = (
+        f"⏱ <b>таймер рекламы</b>\n\n"
+        f"сейчас: {_fmt_expires(expires)}\n\n"
+        "выбери новый срок:"
+    )
+    try:
+        await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb_ad_timer())
+    except Exception:
+        await call.message.answer(text, parse_mode="HTML", reply_markup=kb_ad_timer())
+
+
+@router.callback_query(F.data.startswith("adm:ad_timer_set:"))
+async def adm_ad_timer_set(call: CallbackQuery, session: AsyncSession, bot: Bot):
+    hours = int(call.data.split(":")[2])
+    repo  = SettingsRepository(session)
+    expires = await repo.set_ad_expires_hours(hours)
+    await session.commit()
+
+    if hours == 0:
+        label = "постоянно ♾"
+    else:
+        label = _fmt_expires(expires)
+
+    _log.user("admin ad_timer set: admin=%s hours=%d expires=%s",
+              call.from_user.id, hours, expires)
+    await call.answer(f"⏱ таймер установлен", show_alert=False)
+
+    # Возвращаемся в меню рекламы с обновлёнными данными
+    await _show_ad_menu(call, session, bot)
+
+
+# ── Отключить канал ──────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm:ad_clear")
+async def adm_ad_clear(call: CallbackQuery, session: AsyncSession):
+    await call.answer()
+    repo = SettingsRepository(session)
+    await repo.set_ad_channel(None)
+    await repo.set_ad_expires(None)
+    await session.commit()
+    _log.user("admin ad_channel cleared: admin=%s", call.from_user.id)
+    await call.message.answer(
+        "🗑 рекламный канал отключён.",
+        parse_mode="HTML", reply_markup=kb_admin_back(),
+    )

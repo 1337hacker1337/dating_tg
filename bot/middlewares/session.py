@@ -1,24 +1,14 @@
 from typing import Any, Awaitable, Callable
-
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
-
 from db.session import AsyncSessionFactory
 from db.repositories.user_repo import UserRepository
 from bot import logger as log
 
 _log = log.get(__name__)
 
-
 class SessionMiddleware(BaseMiddleware):
-    """Пробрасывает сессию БД в хэндлеры через data['session']."""
-
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
+    async def __call__(self, handler, event, data):
         async with AsyncSessionFactory() as session:
             data["session"] = session
             try:
@@ -27,25 +17,16 @@ class SessionMiddleware(BaseMiddleware):
                 await session.rollback()
                 raise
 
-
 class BanCheckMiddleware(BaseMiddleware):
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
+    async def __call__(self, handler, event, data):
         user = data.get("event_from_user")
         if user is None:
             return await handler(event, data)
-
         session = data.get("session")
         if session is None:
             return await handler(event, data)
-
-        repo    = UserRepository(session)
+        repo = UserRepository(session)
         db_user = await repo.get_light(user.id)
-
         if db_user and db_user.is_banned:
             if isinstance(event, CallbackQuery):
                 await event.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.", show_alert=True)
@@ -55,10 +36,8 @@ class BanCheckMiddleware(BaseMiddleware):
                 await event.message.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.")
             _log.warning("banned user blocked: user=%s", user.id)
             return
-
         if db_user:
             await repo.update_last_seen(user.id)
             await session.commit()
-
         data["db_user"] = db_user
         return await handler(event, data)

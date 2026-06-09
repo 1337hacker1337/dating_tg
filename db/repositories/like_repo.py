@@ -24,17 +24,14 @@ class LikeRepository:
         await self._recalc_rating(to_user)
 
     async def _recalc_rating(self, user_id: int) -> None:
-        """avg_rating = likes / total, rating_count = total — один запрос."""
         q = select(
             func.count().filter(Like.value.is_(True)).label("likes"),
             func.count().label("total"),
         ).where(Like.to_user == user_id)
         row = (await self.session.execute(q)).one()
-
         likes: int = row.likes or 0
         total: int = row.total or 0
         ratio = (likes / total) if total > 0 else 0.0
-
         await self.session.execute(
             update(User).where(User.id == user_id).values(avg_rating=ratio, rating_count=total)
         )
@@ -48,7 +45,6 @@ class LikeRepository:
         return result.scalar()
 
     async def reaction_exists(self, from_user: int, to_user: int) -> bool:
-        """Любая реакция (лайк ИЛИ дизлайк) уже была — чтобы не слать повторное уведомление."""
         result = await self.session.execute(
             select(exists().where(
                 and_(Like.from_user == from_user, Like.to_user == to_user)
@@ -65,7 +61,6 @@ class LikeRepository:
         return result.scalar()
 
     async def count_unanswered_likers(self, user_id: int) -> int:
-        """Количество лайков без ответа — для бейджа."""
         liked_me  = select(Like.from_user).where(Like.to_user == user_id, Like.value.is_(True))
         i_reacted = select(Like.to_user).where(Like.from_user == user_id)
         r = await self.session.execute(
@@ -76,7 +71,6 @@ class LikeRepository:
         return r.scalar() or 0
 
     async def get_unanswered_liker_at(self, user_id: int, offset: int) -> Optional[int]:
-        """Один liker_id по смещению — без загрузки всего списка в память."""
         liked_me  = select(Like.from_user).where(Like.to_user == user_id, Like.value.is_(True))
         i_reacted = select(Like.to_user).where(Like.from_user == user_id)
         q = (
@@ -95,7 +89,6 @@ class LikeRepository:
             select(func.count()).select_from(Like).where(Like.value.is_(True))
         )
         return r.scalar()
-
 
 
 class MatchRepository:

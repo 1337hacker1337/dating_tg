@@ -118,3 +118,11 @@ class Admin(Base):
     username:    Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     added_at:    Mapped[datetime]      = mapped_column(DateTime(timezone=True), server_default=func.now())
     added_by:    Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("admins.id"), nullable=True)
+
+
+class BotSettings(Base):
+    """Хранилище настроек бота (key-value)."""
+    __tablename__ = "bot_settings"
+
+    key:   Mapped[str]           = mapped_column(String(64), primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
