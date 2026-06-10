@@ -18,7 +18,7 @@ from db.repositories.settings_repo import SettingsRepository
 
 _log = log.get(__name__)
 
-_BYPASS_COMMANDS = {"/start", "/admin"}
+_BYPASS_COMMANDS = {"/start", "/admin", "/rules"}
 
 _BLOCKED_TEXT = (
     "🔒  доступ закрыт.\n\n"
@@ -114,10 +114,9 @@ class SubscriptionMiddleware(BaseMiddleware):
         if user is None:
             return await handler(event, data)
 
-        bot: Bot  = data["bot"]
-        session   = data.get("session")
+        bot: Bot = data["bot"]
+        session  = data.get("session")
 
-        # Достаём callback и message прямо из атрибутов Update
         cb  = getattr(event, "callback_query", None)
         msg = getattr(event, "message", None) or getattr(event, "edited_message", None)
 
@@ -132,7 +131,7 @@ class SubscriptionMiddleware(BaseMiddleware):
             await cb.answer()
             return
 
-        # ── Пропускаем /start и /admin ────────────────────────────
+        # ── Пропускаем bypass-команды (/start, /admin, /rules) ───
         if msg is not None and msg.text:
             cmd = msg.text.split()[0].lower().split("@")[0]
             if cmd in _BYPASS_COMMANDS:
@@ -159,7 +158,7 @@ class SubscriptionMiddleware(BaseMiddleware):
         await send_block(bot, user.id, missing, cb=cb)
 
     async def _handle_check(self, cb, session, bot: Bot, user_id: int) -> None:
-        await cb.answer()  # сразу убираем крутилку
+        await cb.answer()
         _log.info("sub:check processing user=%s", user_id)
 
         if session is None:

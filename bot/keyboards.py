@@ -59,7 +59,8 @@ def kb_swipe(candidate_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="🤮", callback_data=f"dislike:{candidate_id}")
     b.button(text="🩸", callback_data=f"like:{candidate_id}")
-    b.adjust(2)
+    b.button(text="🚩", callback_data=f"report:start:{candidate_id}")
+    b.adjust(2, 1)
     return b.as_markup()
 
 
@@ -73,11 +74,22 @@ def kb_match(partner_tg_id: int, username: str = None) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def kb_profile_actions() -> InlineKeyboardMarkup:
+def kb_profile_actions(notifications_on: bool = True) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="✏️ редактировать", callback_data="edit_profile")
-    b.button(text="🙈 скрыть",        callback_data="hide_profile")
-    b.button(text="👁 показать",      callback_data="show_profile")
-    b.button(text="⚰️ удалить анкету", callback_data="delete_profile")
-    b.adjust(1, 2, 1)
+    b.button(text="✏️ редактировать",      callback_data="edit_profile")
+    b.button(text="🙈 скрыть",             callback_data="hide_profile")
+    b.button(text="👁 показать",           callback_data="show_profile")
+    notif = "🔔 уведы вкл" if notifications_on else "🔕 уведы выкл"
+    b.button(text=notif,                   callback_data="toggle_notifications")
+    b.button(text="⚰️ удалить анкету",      callback_data="delete_profile")
+    b.adjust(1, 2, 1, 1)
+    return b.as_markup()
+
+
+def kb_report_reasons(target_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="📢 спам / реклама", callback_data=f"report:do:{target_id}:spam")
+    b.button(text="⚙️ другое",         callback_data=f"report:do:{target_id}:other")
+    b.button(text="❌ отмена",          callback_data="report:cancel")
+    b.adjust(1)
     return b.as_markup()

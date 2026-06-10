@@ -45,6 +45,12 @@ class User(Base):
 
     is_active:  Mapped[bool] = mapped_column(Boolean, default=True,  nullable=False)
     is_banned:  Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Пользователь может отключить все push-уведомления от бота
+    notifications_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, server_default="true"
+    )
+
     registered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -55,7 +61,7 @@ class User(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    photos:  Mapped[list["Photo"]]  = relationship(
+    photos: Mapped[list["Photo"]] = relationship(
         "Photo", back_populates="user", order_by="Photo.position"
     )
 
@@ -126,3 +132,25 @@ class BotSettings(Base):
 
     key:   Mapped[str]           = mapped_column(String(64), primary_key=True)
     value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class ReportReasonEnum(str, enum.Enum):
+    spam  = "spam"
+    other = "other"
+
+
+class Report(Base):
+    __tablename__ = "reports"
+
+    id:          Mapped[int]              = mapped_column(Integer, primary_key=True, autoincrement=True)
+    reporter_id: Mapped[int]              = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
+    target_id:   Mapped[int]              = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
+    reason:      Mapped[ReportReasonEnum] = mapped_column(Enum(ReportReasonEnum), nullable=False)
+    is_reviewed: Mapped[bool]             = mapped_column(Boolean, default=False, nullable=False)
+    created_at:  Mapped[datetime]         = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("reporter_id", "target_id", name="uq_reports_pair"),
+        Index("ix_reports_target",   "target_id"),
+        Index("ix_reports_reviewed", "is_reviewed"),
+    )

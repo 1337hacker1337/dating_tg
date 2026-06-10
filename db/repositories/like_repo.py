@@ -1,4 +1,6 @@
+from datetime import datetime, timezone, timedelta
 from typing import Optional
+
 from sqlalchemy import select, func, exists, and_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -89,6 +91,32 @@ class LikeRepository:
             select(func.count()).select_from(Like).where(Like.value.is_(True))
         )
         return r.scalar()
+
+    # ── Лимиты свайпов ────────────────────────────────────────────
+
+    async def count_recent_swipes(self, user_id: int, hours: int = 6) -> int:
+        """Количество свайпов (лайки + дизы) за последние N часов."""
+        since = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+        r = await self.session.execute(
+            select(func.count()).select_from(Like).where(
+                Like.from_user == user_id,
+                Like.created_at >= since,
+            )
+        )
+        return r.scalar() or 0
+
+    async def get_oldest_swipe_in_window(
+        self, user_id: int, hours: int = 6
+    ) -> Optional[datetime]:
+        """Самый ранний свайп в текущем окне (нужен для расчёта таймера)."""
+        since = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+        r = await self.session.execute(
+            select(Like.created_at).where(
+                Like.from_user == user_id,
+                Like.created_at >= since,
+            ).order_by(Like.created_at.asc()).limit(1)
+        )
+        return r.scalar_one_or_none()
 
 
 class MatchRepository:

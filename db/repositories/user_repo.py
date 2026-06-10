@@ -46,16 +46,27 @@ class UserRepository:
         )
 
     async def set_active(self, user_id, active):
-        await self.session.execute(update(User).where(User.id == user_id).values(is_active=active))
+        await self.session.execute(
+            update(User).where(User.id == user_id).values(is_active=active)
+        )
 
     async def set_banned(self, user_id, banned):
-        await self.session.execute(update(User).where(User.id == user_id).values(is_banned=banned))
+        await self.session.execute(
+            update(User).where(User.id == user_id).values(is_banned=banned)
+        )
+
+    async def set_notifications(self, user_id: int, enabled: bool) -> None:
+        await self.session.execute(
+            update(User).where(User.id == user_id).values(notifications_enabled=enabled)
+        )
 
     async def delete(self, user_id):
         await self.session.execute(delete(User).where(User.id == user_id))
 
     async def count_photos(self, user_id):
-        result = await self.session.execute(select(func.count()).where(Photo.user_id == user_id))
+        result = await self.session.execute(
+            select(func.count()).where(Photo.user_id == user_id)
+        )
         return result.scalar()
 
     async def add_photo(self, user_id, file_id):
@@ -79,7 +90,11 @@ class UserRepository:
         )
         row_l = (await self.session.execute(likes_q)).one()
         row_m = (await self.session.execute(matches_q)).one()
-        return {"likes": row_l.likes or 0, "dislikes": row_l.dislikes or 0, "matches": row_m.matches or 0}
+        return {
+            "likes":    row_l.likes    or 0,
+            "dislikes": row_l.dislikes or 0,
+            "matches":  row_m.matches  or 0,
+        }
 
     async def get_next_candidate(self, current_user: User, nearby_radius_km: int = 50) -> Optional[User]:
         seen_subq = select(Like.to_user).where(Like.from_user == current_user.id)
@@ -103,15 +118,23 @@ class UserRepository:
                 User.longitude.between(lon - deg, lon + deg),
             )
             priority = case((in_bbox, 0), else_=1)
-            dist_sq = (
+            dist_sq  = (
                 (User.latitude - lat) * (User.latitude - lat) +
                 (User.longitude - lon) * (User.longitude - lon)
             )
-            q = (select(User).options(selectinload(User.photos))
-                 .where(base_filter).order_by(priority, dist_sq, func.random()).limit(1))
+            q = (
+                select(User).options(selectinload(User.photos))
+                .where(base_filter)
+                .order_by(priority, dist_sq, func.random())
+                .limit(1)
+            )
         else:
-            q = (select(User).options(selectinload(User.photos))
-                 .where(base_filter).order_by(func.random()).limit(1))
+            q = (
+                select(User).options(selectinload(User.photos))
+                .where(base_filter)
+                .order_by(func.random())
+                .limit(1)
+            )
 
         result = await self.session.execute(q)
         return result.scalar_one_or_none()
@@ -127,7 +150,9 @@ class UserRepository:
         return r.scalar()
 
     async def count_banned(self):
-        r = await self.session.execute(select(func.count()).where(User.is_banned.is_(True)))
+        r = await self.session.execute(
+            select(func.count()).where(User.is_banned.is_(True))
+        )
         return r.scalar()
 
     async def list_users(self, offset=0, limit=50, search=None, banned=None):
@@ -141,12 +166,15 @@ class UserRepository:
         return list(r.scalars().all())
 
     async def get_users_for_notify(self, inactive_hours=48, cooldown_hours=48):
-        now = datetime.now(tz=timezone.utc)
+        now            = datetime.now(tz=timezone.utc)
         inactive_since = now - timedelta(hours=inactive_hours)
         notified_since = now - timedelta(hours=cooldown_hours)
         q = select(User.id).where(
-            User.is_active.is_(True), User.is_banned.is_(False),
-            User.last_seen_at.isnot(None), User.last_seen_at < inactive_since,
+            User.is_active.is_(True),
+            User.is_banned.is_(False),
+            User.notifications_enabled.is_(True),   # уважаем настройку
+            User.last_seen_at.isnot(None),
+            User.last_seen_at < inactive_since,
             or_(User.notified_at.is_(None), User.notified_at < notified_since),
         )
         r = await self.session.execute(q)

@@ -4,6 +4,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from sqlalchemy import text
 
 from bot import logger as log
 from bot.notify import create_scheduler
@@ -11,8 +12,9 @@ from config import settings
 from db.session import engine, AsyncSessionFactory
 from db.models import Base
 from bot.middlewares.session import SessionMiddleware, BanCheckMiddleware
+from bot.middlewares.command_throttle import CommandThrottleMiddleware
 from bot.middlewares.subscription import SubscriptionMiddleware
-from bot.handlers import start, browse, profile, admin
+from bot.handlers import start, browse, profile, admin, rules, report, admin_reports
 
 log.setup(log_dir="logs", debug=True)
 _log = log.get("bot.main")
@@ -32,10 +34,26 @@ async def _ensure_first_admin() -> None:
             _log.info("первый администратор добавлен: %s", settings.first_admin_id)
 
 
+async def _run_migrations(conn) -> None:
+    """
+    Безопасные миграции — добавляем новые колонки если их нет.
+    Идемпотентно, работает при каждом запуске.
+    """
+    migrations = [
+        # v2: уведомления on/off
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+        "notifications_enabled BOOLEAN NOT NULL DEFAULT TRUE",
+    ]
+    for stmt in migrations:
+        await conn.execute(text(stmt))
+    _log.info("миграции применены (%d)", len(migrations))
+
+
 async def on_startup(bot: Bot) -> None:
     global _scheduler
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _run_migrations(conn)
     _log.info("БД готова")
     await _ensure_first_admin()
     _scheduler = create_scheduler(bot)
@@ -63,12 +81,15 @@ async def main() -> None:
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp  = Dispatcher(storage=MemoryStorage())
 
-    # Все три на dp.update — event это Update, session доступен всем
     dp.update.middleware(SessionMiddleware())
     dp.update.middleware(BanCheckMiddleware())
+    dp.update.middleware(CommandThrottleMiddleware())  # до subscription
     dp.update.middleware(SubscriptionMiddleware())
 
+    dp.include_router(admin_reports.router)  # раньше admin.router — не зависит от его версии
     dp.include_router(admin.router)
+    dp.include_router(rules.router)
+    dp.include_router(report.router)
     dp.include_router(start.router)
     dp.include_router(browse.router)
     dp.include_router(profile.router)

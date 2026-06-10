@@ -12,7 +12,8 @@ def kb_admin_main() -> InlineKeyboardMarkup:
     b.button(text="🧬 калибровка",     callback_data="adm:calibration")
     b.button(text="👑 администраторы", callback_data="adm:admins")
     b.button(text="📢 реклама",        callback_data="adm:ad_channel")
-    b.adjust(2, 2, 2, 1, 1)
+    b.button(text="🚩 репорты",        callback_data="adm:reports")
+    b.adjust(2, 2, 2, 2, 1)
     return b.as_markup()
 
 
@@ -67,17 +68,52 @@ def kb_ad_channel(has_channel: bool, has_timer: bool) -> InlineKeyboardMarkup:
 def kb_ad_timer() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     presets = [
-        ("1 час",    "adm:ad_timer_set:1"),
-        ("3 часа",   "adm:ad_timer_set:3"),
-        ("6 часов",  "adm:ad_timer_set:6"),
-        ("12 часов", "adm:ad_timer_set:12"),
-        ("24 часа",  "adm:ad_timer_set:24"),
-        ("3 дня",    "adm:ad_timer_set:72"),
-        ("7 дней",   "adm:ad_timer_set:168"),
-        ("постоянно","adm:ad_timer_set:0"),
+        ("1 час",     "adm:ad_timer_set:1"),
+        ("3 часа",    "adm:ad_timer_set:3"),
+        ("6 часов",   "adm:ad_timer_set:6"),
+        ("12 часов",  "adm:ad_timer_set:12"),
+        ("24 часа",   "adm:ad_timer_set:24"),
+        ("3 дня",     "adm:ad_timer_set:72"),
+        ("7 дней",    "adm:ad_timer_set:168"),
+        ("постоянно", "adm:ad_timer_set:0"),
     ]
     for label, cd in presets:
         b.button(text=label, callback_data=cd)
     b.button(text="◀️ назад", callback_data="adm:ad_channel")
     b.adjust(2, 2, 2, 2, 1)
+    return b.as_markup()
+
+
+def kb_report_actions(
+    report_id: int,
+    target_id: int,
+    is_banned: bool,
+    page: int,
+    total: int,
+) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+
+    # Действия
+    if not is_banned:
+        b.button(text="🚷 забанить",  callback_data=f"adm:rep_ban:{report_id}:{page}")
+    b.button(text="✅ отклонить", callback_data=f"adm:rep_dismiss:{report_id}:{page}")
+
+    # Навигация
+    if total > 1:
+        if page > 0:
+            b.button(text="←", callback_data=f"adm:rep_page:{page - 1}")
+        b.button(text=f"{page + 1}/{total}", callback_data="noop")
+        if page < total - 1:
+            b.button(text="→", callback_data=f"adm:rep_page:{page + 1}")
+
+    b.button(text="◀️ меню", callback_data="adm:menu")
+
+    # Раскладка: [действия] [навигация] [меню]
+    action_cols = 1 if is_banned else 2
+    nav_cols    = min(3, total) if total > 1 else 0
+    if nav_cols:
+        b.adjust(action_cols, nav_cols, 1)
+    else:
+        b.adjust(action_cols, 1)
+
     return b.as_markup()
