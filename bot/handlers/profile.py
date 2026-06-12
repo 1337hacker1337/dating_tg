@@ -233,6 +233,33 @@ async def collect_edit_photo(message: Message, state: FSMContext, session):
 
 # ── Видимость профиля ─────────────────────────────────────────────
 
+@router.callback_query(F.data == "toggle_visibility")
+async def toggle_visibility(call: CallbackQuery, session):
+    repo = UserRepository(session)
+    user = await repo.get_light(call.from_user.id)
+    if user is None:
+        await call.answer()
+        return
+    new_state = not user.is_active
+    await repo.set_active(call.from_user.id, new_state)
+    await session.commit()
+    label = "показана 👁" if new_state else "скрыта 🙈"
+    try:
+        await call.answer(label, show_alert=True)
+    except Exception:
+        pass
+    try:
+        await call.message.edit_reply_markup(
+            reply_markup=kb_profile_actions(
+                notifications_on=user.notifications_enabled,
+                is_active=new_state,
+            )
+        )
+    except Exception:
+        pass
+
+
+# Обратная совместимость — старые сообщения со старыми кнопками
 @router.callback_query(F.data == "hide_profile")
 async def hide_profile(call: CallbackQuery, session):
     repo = UserRepository(session)
@@ -240,7 +267,10 @@ async def hide_profile(call: CallbackQuery, session):
     if user and user.is_active:
         await repo.set_active(call.from_user.id, False)
         await session.commit()
-        await call.answer("скрыта.", show_alert=True)
+        try:
+            await call.answer("скрыта 🙈", show_alert=True)
+        except Exception:
+            pass
     else:
         await call.answer("уже скрыта.")
 
@@ -252,7 +282,10 @@ async def show_profile_handler(call: CallbackQuery, session):
     if user and not user.is_active:
         await repo.set_active(call.from_user.id, True)
         await session.commit()
-        await call.answer("активирована.", show_alert=True)
+        try:
+            await call.answer("показана 👁", show_alert=True)
+        except Exception:
+            pass
     else:
         await call.answer("уже активна.")
 

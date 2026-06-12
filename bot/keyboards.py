@@ -74,15 +74,15 @@ def kb_match(partner_tg_id: int, username: str = None) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def kb_profile_actions(notifications_on: bool = True) -> InlineKeyboardMarkup:
+def kb_profile_actions(notifications_on: bool = True, is_active: bool = True) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✏️ редактировать",      callback_data="edit_profile")
-    b.button(text="🙈 скрыть",             callback_data="hide_profile")
-    b.button(text="👁 показать",           callback_data="show_profile")
+    vis   = "🙈 скрыть" if is_active else "👁 показать"
+    b.button(text=vis,                     callback_data="toggle_visibility")
     notif = "🔔 уведы вкл" if notifications_on else "🔕 уведы выкл"
     b.button(text=notif,                   callback_data="toggle_notifications")
     b.button(text="⚰️ удалить анкету",      callback_data="delete_profile")
-    b.adjust(1, 2, 1, 1)
+    b.adjust(1, 1, 1, 1)
     return b.as_markup()
 
 
