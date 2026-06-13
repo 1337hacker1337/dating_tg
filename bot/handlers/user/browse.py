@@ -1,45 +1,28 @@
-import math
+"""bot/handlers/user/browse.py — лента, лайки, мэтчи."""
 from datetime import datetime, timezone, timedelta
 
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.keyboards import kb_main_menu, kb_match, kb_swipe
-from bot.rating import format_rating_line
-from bot.services import BrowseService
 from bot import logger as log
+from bot.constants import SWIPE_LIMIT, SWIPE_WINDOW_HOURS
+from bot.keyboards import kb_main_menu, kb_match, kb_swipe
+from bot.services import BrowseService
+from bot.utils.formatting import fmt_delta, profile_caption
 from config import settings
-from db.models import User
 from db.repositories.admin_repo import AdminRepository
 from db.repositories.user_repo import UserRepository
 from db.repositories.like_repo import LikeRepository
 
 _log = log.get(__name__)
-router = Router()
-
-# ── Лимиты свайпов ────────────────────────────────────────────────
-SWIPE_LIMIT        = 50   # свайпов (лайки + дизы вместе)
-SWIPE_WINDOW_HOURS = 6    # скользящее окно в часах
+router = Router(name="browse")
 
 
-def _fmt_delta(delta: timedelta) -> str:
-    secs = max(0, int(delta.total_seconds()))
-    h, rem = divmod(secs, 3600)
-    m = rem // 60
-    if h and m:
-        return f"{h}ч {m}м"
-    if h:
-        return f"{h}ч"
-    return f"{m}м"
-
+# ── Лимит свайпов ─────────────────────────────────────────────────
 
 async def _swipe_limit_exceeded(user_id: int, session) -> tuple[bool, str]:
-    """
-    Возвращает (exceeded, alert_text).
-    Admins всегда пропускаются.
-    """
+    """Возвращает (exceeded, alert_text). Админы всегда пропускаются."""
     if await AdminRepository(session).is_admin(user_id):
         return False, ""
 
@@ -54,7 +37,7 @@ async def _swipe_limit_exceeded(user_id: int, session) -> tuple[bool, str]:
         next_slot = oldest + timedelta(hours=SWIPE_WINDOW_HOURS)
         delta = next_slot - datetime.now(tz=timezone.utc)
         if delta.total_seconds() > 0:
-            timer = f"\nследующий слот через {_fmt_delta(delta)}."
+            timer = f"\nследующий слот через {fmt_delta(delta)}."
 
     text = (
         f"⏳  лимит.\n"
@@ -63,49 +46,10 @@ async def _swipe_limit_exceeded(user_id: int, session) -> tuple[bool, str]:
     return True, text
 
 
-# ── Вспомогательные ───────────────────────────────────────────────
-
-def _haversine_km(lat1, lon1, lat2, lon2) -> float:
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlon / 2) ** 2
-    )
-    return R * 2 * math.asin(math.sqrt(a))
-
-
-async def _profile_caption(candidate: User, session, viewer=None) -> str:
-    header = f"<b>{candidate.name}</b>, {candidate.age}"
-    if viewer and viewer.latitude is not None and candidate.latitude is not None:
-        dist = round(
-            _haversine_km(
-                viewer.latitude, viewer.longitude,
-                candidate.latitude, candidate.longitude,
-            ),
-            1,
-        )
-        header += f"  ·  {dist} км"
-    lines = [header]
-    if candidate.bio:
-        lines += ["", f"<i>{candidate.bio}</i>"]
-    likes    = round(candidate.avg_rating * candidate.rating_count)
-    dislikes = candidate.rating_count - likes
-    stats    = await UserRepository(session).get_profile_stats(candidate.id)
-    lines += [
-        "",
-        format_rating_line(candidate.avg_rating, candidate.rating_count),
-        "",
-        f"🩸 <code>{likes}</code>  ·  🤮 <code>{dislikes}</code>  ·  ⚔️ <code>{stats['matches']}</code>",
-    ]
-    return "\n".join(lines)
-
+# ── Отправка карточки ─────────────────────────────────────────────
 
 async def _send_card(user_id, bot, candidate, session, viewer=None):
-    caption = await _profile_caption(candidate, session, viewer)
+    caption = await profile_caption(candidate, session, viewer)
     kb = kb_swipe(candidate.id)
     if candidate.photos:
         await bot.send_photo(
@@ -167,9 +111,7 @@ async def handle_like(call: CallbackQuery, bot: Bot, session, db_user=None):
         await _send_match_notification(call.from_user.id, result.partner, bot, session)
         viewer = db_user or await svc.users.get(call.from_user.id)
         if viewer:
-            await _send_match_notification(
-                result.partner.id, viewer, bot, session, write_to=call.from_user.id
-            )
+            await _send_match_notification(result.partner.id, viewer, bot, session)
     elif result.notify_like:
         await _notify_liked(candidate_id, bot, session)
 
@@ -240,7 +182,7 @@ async def _show_likes_page(user_id, bot, session, page, delete_msg_id=None):
         return
 
     viewer  = await repo.get(user_id)
-    caption = f"🩸  {page + 1} / {total}\n\n" + await _profile_caption(liker, session, viewer)
+    caption = f"🩸  {page + 1} / {total}\n\n" + await profile_caption(liker, session, viewer)
 
     b = InlineKeyboardBuilder()
     if page > 0:
@@ -282,9 +224,7 @@ async def likes_react(call: CallbackQuery, bot: Bot, session):
         await _send_match_notification(call.from_user.id, result.partner, bot, session)
         viewer = await svc.users.get(call.from_user.id)
         if viewer:
-            await _send_match_notification(
-                result.partner.id, viewer, bot, session, write_to=call.from_user.id
-            )
+            await _send_match_notification(result.partner.id, viewer, bot, session)
 
     like_repo = LikeRepository(session)
     total     = await like_repo.count_unanswered_likers(call.from_user.id)
@@ -336,7 +276,7 @@ async def _show_matches_page(user_id, bot, session, page, delete_msg_id=None):
     page    = max(0, min(page, len(matches) - 1))
     partner = matches[page]
     viewer  = await UserRepository(session).get(user_id)
-    caption = f"⚔️  {page + 1} / {len(matches)}\n\n" + await _profile_caption(partner, session, viewer)
+    caption = f"⚔️  {page + 1} / {len(matches)}\n\n" + await profile_caption(partner, session, viewer)
 
     b = InlineKeyboardBuilder()
     if page > 0:
@@ -362,11 +302,14 @@ async def _show_matches_page(user_id, bot, session, page, delete_msg_id=None):
 
 # ── Уведомления ───────────────────────────────────────────────────
 
-async def _send_match_notification(user_id, partner, bot, session, write_to=None):
-    target   = write_to or partner.id
-    username = partner.username if not write_to else None
-    caption  = "⚔️  мэтч.\n\n" + await _profile_caption(partner, session)
-    kb       = kb_match(target, username=username)
+async def _send_match_notification(user_id, partner, bot, session):
+    """
+    БАГФИКС: раньше при отправке партнёру (write_to=...) его username
+    принудительно обнулялся — кнопка «написать» всегда вела в тупик
+    «закрытый профиль». Теперь username партнёра используется всегда.
+    """
+    caption = "⚔️  мэтч.\n\n" + await profile_caption(partner, session)
+    kb      = kb_match(partner.id, username=partner.username)
     try:
         if partner.photos:
             await bot.send_photo(

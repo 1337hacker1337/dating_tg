@@ -1,3 +1,4 @@
+"""bot/keyboards/admin.py — клавиатуры админ-панели."""
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -98,21 +99,25 @@ def kb_report_actions(
         b.button(text="🚷 забанить",  callback_data=f"adm:rep_ban:{report_id}:{page}")
     b.button(text="✅ отклонить", callback_data=f"adm:rep_dismiss:{report_id}:{page}")
 
-    # Навигация
+    # Навигация — считаем фактическое число кнопок
+    # (БАГФИКС: раньше nav_cols = min(3, total) ломал раскладку
+    #  на первой/последней странице, где кнопок 2, а не 3)
+    nav_buttons = 0
     if total > 1:
         if page > 0:
             b.button(text="←", callback_data=f"adm:rep_page:{page - 1}")
+            nav_buttons += 1
         b.button(text=f"{page + 1}/{total}", callback_data="noop")
+        nav_buttons += 1
         if page < total - 1:
             b.button(text="→", callback_data=f"adm:rep_page:{page + 1}")
+            nav_buttons += 1
 
     b.button(text="◀️ меню", callback_data="adm:menu")
 
-    # Раскладка: [действия] [навигация] [меню]
     action_cols = 1 if is_banned else 2
-    nav_cols    = min(3, total) if total > 1 else 0
-    if nav_cols:
-        b.adjust(action_cols, nav_cols, 1)
+    if nav_buttons:
+        b.adjust(action_cols, nav_buttons, 1)
     else:
         b.adjust(action_cols, 1)
 

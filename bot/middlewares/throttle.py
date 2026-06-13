@@ -1,7 +1,5 @@
 """
-bot/middlewares/command_throttle.py
-Антиспам для команд. Регистрируется на dp.update.
-event — Update-объект, пользователя берём прямо из msg.from_user.
+bot/middlewares/throttle.py — антиспам для команд. Регистрируется на dp.update.
 """
 import time
 from typing import Any, Awaitable, Callable
@@ -40,7 +38,6 @@ class CommandThrottleMiddleware(BaseMiddleware):
         if not msg or not msg.text or not msg.text.startswith("/"):
             return await handler(event, data)
 
-        # берём user_id прямо из объекта Message — не зависим от data
         if not msg.from_user:
             return await handler(event, data)
         user_id = msg.from_user.id
@@ -48,8 +45,7 @@ class CommandThrottleMiddleware(BaseMiddleware):
         self._maybe_cleanup()
 
         now     = time.monotonic()
-        last    = self._last.get(user_id, 0.0)
-        elapsed = now - last
+        elapsed = now - self._last.get(user_id, 0.0)
 
         if elapsed < self._rate:
             wait = round(self._rate - elapsed, 1)
@@ -58,7 +54,7 @@ class CommandThrottleMiddleware(BaseMiddleware):
                 await msg.answer(f"⏳  {wait}с.")
             except Exception:
                 pass
-            return          # глотаем апдейт, handler не вызываем
+            return  # глотаем апдейт
 
         self._last[user_id] = now
         return await handler(event, data)

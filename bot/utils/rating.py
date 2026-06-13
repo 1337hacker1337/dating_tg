@@ -1,6 +1,6 @@
 """
-SMV-ранговая система. Ранг = winrate (лайки / всего оценок).
-До MIN_VOTES — калибровка, ранг скрыт.
+bot/utils/rating.py — SMV-ранговая система.
+Ранг = winrate (лайки / всего оценок). До MIN_VOTES — калибровка, ранг скрыт.
 """
 from dataclasses import dataclass
 

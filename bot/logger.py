@@ -7,15 +7,19 @@ from pathlib import Path
 USER_LEVEL = 25
 logging.addLevelName(USER_LEVEL, "USER")
 
+
 def _user(self, msg, *args, **kwargs):
     if self.isEnabledFor(USER_LEVEL):
         self._log(USER_LEVEL, msg, args, **kwargs)
 
+
 logging.Logger.user = _user  # type: ignore
+
 
 def _short_name(name: str) -> str:
     parts = name.split(".")
     return parts[-1] if parts[-1] not in ("py",) else parts[-2]
+
 
 class _ConsoleFormatter(logging.Formatter):
     R = "\033[0m"; DIM = "\033[2m"; BOLD = "\033[1m"
@@ -27,6 +31,7 @@ class _ConsoleFormatter(logging.Formatter):
         "ERROR":    ("✕",  "\033[38;5;203m"),
         "CRITICAL": ("!!!", "\033[1;38;5;196m"),
     }
+
     def format(self, record):
         icon, color = self.STYLES.get(record.levelname, ("?", self.R))
         time = self.formatTime(record, "%H:%M:%S") + f".{record.msecs:03.0f}"
@@ -39,6 +44,7 @@ class _ConsoleFormatter(logging.Formatter):
             line += "\n" + self.formatException(record.exc_info)
         return line
 
+
 class _FileFormatter(logging.Formatter):
     def format(self, record):
         msec = f"{record.msecs:03.0f}"
@@ -49,6 +55,7 @@ class _FileFormatter(logging.Formatter):
         if record.exc_info:
             base += "\n" + self.formatException(record.exc_info)
         return base
+
 
 def setup(log_dir="logs", debug=False):
     Path(log_dir).mkdir(exist_ok=True)
@@ -63,7 +70,8 @@ def setup(log_dir="logs", debug=False):
     console.setFormatter(_ConsoleFormatter())
     root.addHandler(console)
     fh = logging.handlers.RotatingFileHandler(
-        os.path.join(log_dir, "bot.log"), maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+        os.path.join(log_dir, "bot.log"),
+        maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8",
     )
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(_FileFormatter())
@@ -73,6 +81,7 @@ def setup(log_dir="logs", debug=False):
     sa_level = logging.DEBUG if debug else logging.WARNING
     logging.getLogger("sqlalchemy.engine").setLevel(sa_level)
     logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
+
 
 def get(name: str) -> logging.Logger:
     return logging.getLogger(name)

@@ -24,7 +24,6 @@ class Settings(BaseSettings):
     own_channel_id: Optional[str] = Field(None, alias="OWN_CHANNEL_ID")
 
     # Telegram ID первого администратора — добавляется автоматически при старте.
-    # После добавления можно убрать из .env (но не обязательно).
     first_admin_id: Optional[int] = Field(None, alias="FIRST_ADMIN_ID")
 
 

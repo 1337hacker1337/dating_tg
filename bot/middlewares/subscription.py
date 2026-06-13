@@ -1,7 +1,10 @@
 """
-bot/middlewares/subscription.py
+bot/middlewares/subscription.py — обязательная подписка на каналы.
 Регистрируется на dp.update.middleware — event это Update.
-Достаём callback/message через атрибуты Update напрямую.
+
+БАГФИКС: платёжные апдейты (pre_checkout_query, successful_payment)
+пропускаются без проверки подписки — иначе Telegram отклонял платёж
+по таймауту, либо деньги списывались без выполнения действия.
 """
 from typing import Any, Awaitable, Callable
 
@@ -12,6 +15,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import logger as log
 from bot.keyboards import kb_main_menu
+from bot.texts import SUB_BLOCKED
 from config import settings
 from db.repositories.admin_repo import AdminRepository
 from db.repositories.settings_repo import SettingsRepository
@@ -20,10 +24,12 @@ _log = log.get(__name__)
 
 _BYPASS_COMMANDS = {"/start", "/admin", "/rules"}
 
-_BLOCKED_TEXT = (
-    "🔒  доступ закрыт.\n\n"
-    "подпишись на {channels} — и нажми кнопку ниже."
-)
+
+def _is_payment_update(event) -> bool:
+    if getattr(event, "pre_checkout_query", None) is not None:
+        return True
+    msg = getattr(event, "message", None)
+    return msg is not None and getattr(msg, "successful_payment", None) is not None
 
 
 def _sub_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
@@ -49,8 +55,6 @@ async def get_channels(session, bot: Bot) -> list[dict]:
         if ad:
             ids.append(ad)
 
-    _log.info("sub: channels to check: %s", ids)
-
     result = []
     for chat_id in ids:
         try:
@@ -73,8 +77,6 @@ async def get_missing(bot: Bot, user_id: int, channels: list[dict]) -> list[dict
         try:
             member = await bot.get_chat_member(ch["chat_id"], user_id)
             ok = member.status not in ("left", "kicked", "banned")
-            _log.info("sub: user=%s channel=%s status=%s ok=%s",
-                      user_id, ch["chat_id"], member.status, ok)
             if not ok:
                 result.append(ch)
         except TelegramForbiddenError:
@@ -88,7 +90,7 @@ async def get_missing(bot: Bot, user_id: int, channels: list[dict]) -> list[dict
 
 async def send_block(bot: Bot, user_id: int, missing: list[dict], cb=None) -> None:
     names = " и ".join(f"«{ch['title']}»" for ch in missing)
-    text  = _BLOCKED_TEXT.format(channels=names)
+    text  = SUB_BLOCKED.format(channels=names)
     kb    = _sub_keyboard(missing)
     if cb is not None:
         try:
@@ -102,14 +104,15 @@ async def send_block(bot: Bot, user_id: int, missing: list[dict], cb=None) -> No
 
 
 class SubscriptionMiddleware(BaseMiddleware):
-    """Один класс, регистрируется на dp.update.middleware."""
-
     async def __call__(
         self,
         handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        if _is_payment_update(event):
+            return await handler(event, data)
+
         user = data.get("event_from_user")
         if user is None:
             return await handler(event, data)
@@ -122,7 +125,6 @@ class SubscriptionMiddleware(BaseMiddleware):
 
         # ── Кнопка проверки подписки ──────────────────────────────
         if cb is not None and cb.data == "sub:check":
-            _log.info("sub:check received from user=%s", user.id)
             await self._handle_check(cb, session, bot, user.id)
             return
 
@@ -131,7 +133,7 @@ class SubscriptionMiddleware(BaseMiddleware):
             await cb.answer()
             return
 
-        # ── Пропускаем bypass-команды (/start, /admin, /rules) ───
+        # ── Bypass-команды (/start, /admin, /rules) ───────────────
         if msg is not None and msg.text:
             cmd = msg.text.split()[0].lower().split("@")[0]
             if cmd in _BYPASS_COMMANDS:
@@ -159,8 +161,6 @@ class SubscriptionMiddleware(BaseMiddleware):
 
     async def _handle_check(self, cb, session, bot: Bot, user_id: int) -> None:
         await cb.answer()
-        _log.info("sub:check processing user=%s", user_id)
-
         if session is None:
             await bot.send_message(user_id, "⚠️ ошибка сессии, попробуй позже.")
             return
@@ -169,7 +169,6 @@ class SubscriptionMiddleware(BaseMiddleware):
         missing  = await get_missing(bot, user_id, channels)
 
         if not missing:
-            _log.info("sub:check PASSED user=%s", user_id)
             try:
                 await cb.message.delete()
             except Exception:

@@ -40,6 +40,12 @@ class UserRepository:
             update(User).where(User.id == user_id).values(latitude=latitude, longitude=longitude)
         )
 
+    async def update_username(self, user_id: int, username: Optional[str]) -> None:
+        """Синхронизация username с Telegram (мог измениться после регистрации)."""
+        await self.session.execute(
+            update(User).where(User.id == user_id).values(username=username)
+        )
+
     async def update_last_seen(self, user_id):
         await self.session.execute(
             update(User).where(User.id == user_id).values(last_seen_at=func.now())
@@ -172,7 +178,7 @@ class UserRepository:
         q = select(User.id).where(
             User.is_active.is_(True),
             User.is_banned.is_(False),
-            User.notifications_enabled.is_(True),   # уважаем настройку
+            User.notifications_enabled.is_(True),
             User.last_seen_at.isnot(None),
             User.last_seen_at < inactive_since,
             or_(User.notified_at.is_(None), User.notified_at < notified_since),

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from sqlalchemy import select, update, func
@@ -29,6 +30,14 @@ class ReportRepository:
         await self.session.flush()
         return result.rowcount > 0
 
+    async def get_by_id(self, report_id: int) -> Optional[Report]:
+        """БАГФИКС: бан по репорту должен идти по id, а не по offset страницы —
+        offset сдвигается, когда другой админ параллельно закрывает репорты."""
+        r = await self.session.execute(
+            select(Report).where(Report.id == report_id)
+        )
+        return r.scalar_one_or_none()
+
     async def count_pending(self) -> int:
         r = await self.session.execute(
             select(func.count()).select_from(Report)
@@ -55,7 +64,6 @@ class ReportRepository:
 
     async def count_recent_by_reporter(self, reporter_id: int, hours: int = 1) -> int:
         """Сколько репортов отправил пользователь за последние N часов."""
-        from datetime import datetime, timezone, timedelta
         since = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
         r = await self.session.execute(
             select(func.count()).select_from(Report).where(

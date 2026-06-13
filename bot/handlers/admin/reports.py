@@ -1,34 +1,17 @@
-"""
-bot/handlers/admin_reports.py
-──────────────────────────────
-Раздел репортов в админ-панели — отдельный роутер.
-Регистрируется в main.py ДО admin.router, поэтому работает
-независимо от версии bot/handlers/admin.py на диске.
-"""
-from datetime import datetime, timezone
-
+"""bot/handlers/admin/reports.py — раздел репортов в админ-панели."""
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import logger as log
-from bot.keyboards_admin import kb_admin_back, kb_report_actions
-from bot.middlewares.admin_guard import AdminMiddleware
+from bot.constants import REASON_LABELS
+from bot.keyboards import kb_admin_back, kb_report_actions
 from db.repositories.report_repo import ReportRepository
 from db.repositories.user_repo import UserRepository
 
 _log = log.get(__name__)
-
 router = Router(name="admin_reports")
-router.callback_query.middleware(AdminMiddleware())
 
-_REASON_LABELS = {
-    "spam":  "📢 спам / реклама",
-    "other": "⚙️ другое",
-}
-
-
-# ── Вспомогательная функция отображения ───────────────────────────
 
 async def _show_report_page(call: CallbackQuery, session: AsyncSession, page: int) -> None:
     repo  = ReportRepository(session)
@@ -59,7 +42,7 @@ async def _show_report_page(call: CallbackQuery, session: AsyncSession, page: in
         return f"<b>{u.name}</b>, {u.age}  {status}\n         <code>{u.id}</code>  ·  {mention}"
 
     reason_val   = report.reason.value if hasattr(report.reason, "value") else str(report.reason)
-    reason_label = _REASON_LABELS.get(reason_val, reason_val)
+    reason_label = REASON_LABELS.get(reason_val, reason_val)
     ts           = report.created_at.strftime("%d.%m.%Y %H:%M UTC")
 
     text = (
@@ -79,12 +62,11 @@ async def _show_report_page(call: CallbackQuery, session: AsyncSession, page: in
         await call.message.answer(text, parse_mode="HTML", reply_markup=kb)
 
 
-# ── Вход (кнопка из главного меню) ────────────────────────────────
-# Ловим ОБА формата: "adm:reports" (новый) и "adm:reports:N" (старый)
+# ── Вход ──────────────────────────────────────────────────────────
+# Ловим оба формата: "adm:reports" и устаревший "adm:reports:N"
 
 @router.callback_query(F.data.startswith("adm:reports"))
 async def adm_reports_entry(call: CallbackQuery, session: AsyncSession):
-    _log.info("adm:reports: admin=%s data=%s", call.from_user.id, call.data)
     await call.answer()
     parts = call.data.split(":")
     page  = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
@@ -101,7 +83,7 @@ async def adm_reports_entry(call: CallbackQuery, session: AsyncSession):
             pass
 
 
-# ── Навигация ──────────────────────────────────────────────────────
+# ── Навигация ─────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("adm:rep_page:"))
 async def adm_reports_nav(call: CallbackQuery, session: AsyncSession):
@@ -113,7 +95,7 @@ async def adm_reports_nav(call: CallbackQuery, session: AsyncSession):
         _log.error("adm_reports_nav error: %s", e, exc_info=True)
 
 
-# ── Забанить + закрыть ─────────────────────────────────────────────
+# ── Забанить + закрыть ────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("adm:rep_ban:"))
 async def adm_rep_ban(call: CallbackQuery, session: AsyncSession):
@@ -121,16 +103,25 @@ async def adm_rep_ban(call: CallbackQuery, session: AsyncSession):
     report_id = int(parts[2])
     page      = int(parts[3])
 
-    repo   = ReportRepository(session)
-    report = await repo.get_pending_at(page)
+    repo = ReportRepository(session)
+    # БАГФИКС: репорт берём по id, а не по offset страницы —
+    # offset сдвигается, если другой админ параллельно закрыл репорты,
+    # и раньше бан мог молча не выполниться при показанном «забанено».
+    report = await repo.get_by_id(report_id)
 
-    if report and report.id == report_id:
-        user_repo = UserRepository(session)
-        await user_repo.set_banned(report.target_id, True)
-        await repo.mark_reviewed(report_id)
-        _log.user("admin rep_ban: admin=%s target=%s", call.from_user.id, report.target_id)
+    if report is None or report.is_reviewed:
+        try:
+            await call.answer("репорт уже обработан.", show_alert=True)
+        except Exception:
+            pass
+        await _show_report_page(call, session, page)
+        return
 
+    await UserRepository(session).set_banned(report.target_id, True)
+    await repo.mark_reviewed(report_id)
     await session.commit()
+    _log.user("admin rep_ban: admin=%s target=%s", call.from_user.id, report.target_id)
+
     try:
         await call.answer("🚷 забанено.", show_alert=False)
     except Exception:
@@ -154,4 +145,5 @@ async def adm_rep_dismiss(call: CallbackQuery, session: AsyncSession):
         await call.answer("✅ отклонено.", show_alert=False)
     except Exception:
         pass
-    await _show_report_page(call, session, max(0, page - 1) if page > 0 else 0)
+    # После отклонения total--; если были не на первой странице — сдвигаемся назад
+    await _show_report_page(call, session, max(0, page - 1))

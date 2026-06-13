@@ -1,4 +1,5 @@
 from typing import Optional
+
 from sqlalchemy import select, delete, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +16,14 @@ class AdminRepository:
         )
         return result.scalar()
 
-    async def add(self, telegram_id: int, username: Optional[str] = None, added_by: Optional[int] = None) -> Admin:
+    async def get_by_telegram_id(self, telegram_id: int) -> Optional[Admin]:
+        result = await self.session.execute(
+            select(Admin).where(Admin.telegram_id == telegram_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def add(self, telegram_id: int, username: Optional[str] = None,
+                  added_by: Optional[int] = None) -> Admin:
         admin = Admin(telegram_id=telegram_id, username=username, added_by=added_by)
         self.session.add(admin)
         await self.session.flush()

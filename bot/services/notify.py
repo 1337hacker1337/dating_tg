@@ -1,20 +1,20 @@
-import asyncio, logging, random
+"""bot/services/notify.py — плановые «вернись в ленту»-нотификации."""
+import asyncio
+import logging
+import random
+
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+from bot.texts import NOTIFY_MESSAGES
 from db.session import AsyncSessionFactory
 from db.repositories.user_repo import UserRepository
 
 logger = logging.getLogger(__name__)
-INACTIVE_HOURS      = 48
-COOLDOWN_HOURS      = 48
-CHECK_INTERVAL_HOURS = 2
 
-_MESSAGES = [
-    "🕯️  тебя ждут.\n<i>пока пропадал — кое-что изменилось.</i>",
-    "🩸  не забыли.\n<i>загляни в ленту.</i>",
-    "👁️  кто-то смотрел.\n<i>зайди и проверь.</i>",
-    "🌑  темно без тебя.\n<i>лента скучает.</i>",
-]
+INACTIVE_HOURS       = 48
+COOLDOWN_HOURS       = 48
+CHECK_INTERVAL_HOURS = 2
 
 
 async def _run_notify_job(bot: Bot) -> None:
@@ -35,7 +35,7 @@ async def _run_notify_job(bot: Bot) -> None:
         notified  = []
         for uid in user_ids:
             try:
-                await bot.send_message(uid, random.choice(_MESSAGES), parse_mode="HTML")
+                await bot.send_message(uid, random.choice(NOTIFY_MESSAGES), parse_mode="HTML")
                 notified.append(uid)
                 ok += 1
             except Exception as e:
@@ -61,7 +61,7 @@ def create_scheduler(bot: Bot) -> AsyncIOScheduler:
         trigger="interval",
         hours=CHECK_INTERVAL_HOURS,
         args=[bot],
-        id="daily_notify",
+        id="periodic_notify",
         replace_existing=True,
     )
     return scheduler

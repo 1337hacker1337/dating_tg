@@ -1,10 +1,12 @@
-from typing import Any, Awaitable, Callable
+"""bot/middlewares/admin_guard.py — пускает в админ-роутеры только админов."""
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject, Message, CallbackQuery
-from db.repositories.admin_repo import AdminRepository
+from aiogram.types import Message, CallbackQuery
+
 from bot import logger as log
+from db.repositories.admin_repo import AdminRepository
 
 _log = log.get(__name__)
+
 
 class AdminMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):

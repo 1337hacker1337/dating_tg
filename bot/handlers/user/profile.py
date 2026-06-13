@@ -1,3 +1,4 @@
+"""bot/handlers/user/profile.py — просмотр и редактирование своего профиля."""
 from aiogram import Router, F, Bot
 from aiogram.types import (
     CallbackQuery, Message,
@@ -7,46 +8,21 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import update
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import User, GenderEnum, LookingForEnum
+from bot import logger as log
+from bot.constants import (
+    NAME_MAX_LEN, BIO_MAX_LEN, AGE_MIN, AGE_MAX,
+    DELETE_PAYLOAD, DELETE_STARS,
+)
 from bot.keyboards import kb_main_menu, kb_profile_actions, kb_location, remove_kb
 from bot.services import ProfileService
-from bot import logger as log
-from bot.rating import format_rating_line
 from bot.states import EditProfile
+from bot.utils.formatting import own_profile_text
+from db.models import User, GenderEnum, LookingForEnum
 from db.repositories.user_repo import UserRepository
 
 _log = log.get(__name__)
-router = Router()
-
-# ── Платное удаление ──────────────────────────────────────────────
-_DELETE_PAYLOAD = "delete_profile_v1"
-DELETE_STARS    = 200          # стоимость в Telegram Stars
-
-
-# ── Текст профиля ─────────────────────────────────────────────────
-
-async def _profile_text(user, session) -> str:
-    repo  = UserRepository(session)
-    stats = await repo.get_profile_stats(user.id)
-    lines = [f"<b>{user.name}</b>, {user.age}"]
-    if user.bio:
-        lines += ["", f"<i>{user.bio}</i>"]
-    lines += [
-        "",
-        format_rating_line(user.avg_rating, user.rating_count),
-        "",
-        f"🩸 <code>{stats['likes']}</code>  ·  🤮 <code>{stats['dislikes']}</code>  ·  ⚔️ <code>{stats['matches']}</code>",
-    ]
-    warnings = []
-    if not user.is_active:
-        warnings.append("скрыта")
-    if user.latitude is None:
-        warnings.append("гео не указана")
-    if warnings:
-        lines += ["", "  ·  ".join(warnings)]
-    return "\n".join(lines)
+router = Router(name="profile")
 
 
 # ── Меню ──────────────────────────────────────────────────────────
@@ -74,8 +50,11 @@ async def _send_profile(user_id, msg, session):
     if user is None:
         await msg.answer("анкеты нет.\n\n/start")
         return
-    text = await _profile_text(user, session)
-    kb   = kb_profile_actions(notifications_on=user.notifications_enabled)
+    text = await own_profile_text(user, session)
+    kb = kb_profile_actions(
+        notifications_on=user.notifications_enabled,
+        is_active=user.is_active,
+    )
     if user.photos:
         await msg.answer_photo(
             photo=user.photos[0].file_id, caption=text,
@@ -116,11 +95,11 @@ async def edit_field_start(call: CallbackQuery, state: FSMContext):
         await state.set_state(EditProfile.new_value)
         await state.update_data(edit_field="name")
     elif field == "age":
-        await call.message.answer("возраст.  <code>14–99</code>", parse_mode="HTML")
+        await call.message.answer(f"возраст.  <code>{AGE_MIN}–{AGE_MAX}</code>", parse_mode="HTML")
         await state.set_state(EditProfile.new_value)
         await state.update_data(edit_field="age")
     elif field == "bio":
-        await call.message.answer("о себе.  <i>до 500</i>", parse_mode="HTML")
+        await call.message.answer(f"о себе.  <i>до {BIO_MAX_LEN}</i>", parse_mode="HTML")
         await state.set_state(EditProfile.new_value)
         await state.update_data(edit_field="bio")
     elif field == "gender":
@@ -164,15 +143,44 @@ async def set_looking_for(call: CallbackQuery, session):
     await call.message.answer("·", reply_markup=kb_main_menu())
 
 
-@router.message(EditProfile.new_value)
+# ── Геолокация ────────────────────────────────────────────────────
+# ВАЖНО: location-хэндлер объявлен РАНЬШЕ текстового и текстовый
+# хэндлер получил фильтр F.text.
+# БАГФИКС: раньше apply_edit_value (без фильтра) перехватывал
+# сообщения с геолокацией, и save_new_location никогда не вызывался.
+
+@router.callback_query(F.data == "update_location")
+async def ask_update_location(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await call.message.answer("📡  геолокация.", parse_mode="HTML", reply_markup=kb_location())
+    await state.set_state(EditProfile.new_value)
+    await state.update_data(edit_field="location")
+
+
+@router.message(EditProfile.new_value, F.location)
+async def save_new_location(message: Message, state: FSMContext, session):
+    svc = ProfileService(session)
+    await svc.update_location(
+        message.from_user.id,
+        message.location.latitude,
+        message.location.longitude,
+    )
+    await state.clear()
+    _log.user("update_location: user=%s", message.from_user.id)
+    await message.answer("📡  обновлена.", reply_markup=remove_kb())
+    await message.answer("·", reply_markup=kb_main_menu())
+
+
+@router.message(EditProfile.new_value, F.text)
 async def apply_edit_value(message: Message, state: FSMContext, session):
     data  = await state.get_data()
     field = data.get("edit_field")
 
     if field == "name":
         val = (message.text or "").strip()
-        if not val or len(val) > 64:
-            await message.answer("↑ 1–64 символа.")
+        if not val or len(val) > NAME_MAX_LEN:
+            # БАГФИКС: лимит имени унифицирован (был 64 здесь и 16 при регистрации)
+            await message.answer(f"↑ 1–{NAME_MAX_LEN} символов.")
             return
         await session.execute(
             update(User).where(User.id == message.from_user.id).values(name=val)
@@ -182,8 +190,8 @@ async def apply_edit_value(message: Message, state: FSMContext, session):
 
     elif field == "age":
         txt = (message.text or "").strip()
-        if not txt.isdecimal() or not (14 <= int(txt) <= 99):
-            await message.answer("↑ 14–99.")
+        if not txt.isdecimal() or not (AGE_MIN <= int(txt) <= AGE_MAX):
+            await message.answer(f"↑ {AGE_MIN}–{AGE_MAX}.")
             return
         await session.execute(
             update(User).where(User.id == message.from_user.id).values(age=int(txt))
@@ -196,8 +204,8 @@ async def apply_edit_value(message: Message, state: FSMContext, session):
         if not val:
             await message.answer("↑ не может быть пустым.")
             return
-        if len(val) > 500:
-            await message.answer("↑ не более 500.")
+        if len(val) > BIO_MAX_LEN:
+            await message.answer(f"↑ не более {BIO_MAX_LEN}.")
             return
         await session.execute(
             update(User).where(User.id == message.from_user.id).values(bio=val)
@@ -290,7 +298,7 @@ async def show_profile_handler(call: CallbackQuery, session):
         await call.answer("уже активна.")
 
 
-# ── Платное удаление профиля ──────────────────────────────────────
+# ── Платное удаление профиля (Telegram Stars) ─────────────────────
 
 @router.callback_query(F.data == "delete_profile")
 async def confirm_delete(call: CallbackQuery, bot: Bot):
@@ -306,7 +314,7 @@ async def confirm_delete(call: CallbackQuery, bot: Bot):
             "анкета, фото и все данные будут удалены без возможности восстановления.\n\n"
             "скрыть профиль можно бесплатно — кнопка «🙈 скрыть» в меню."
         ),
-        payload=_DELETE_PAYLOAD,
+        payload=DELETE_PAYLOAD,
         currency="XTR",
         prices=[LabeledPrice(label="удалить анкету", amount=DELETE_STARS)],
         provider_token="",
@@ -314,7 +322,7 @@ async def confirm_delete(call: CallbackQuery, bot: Bot):
     )
 
 
-@router.pre_checkout_query(F.invoice_payload == _DELETE_PAYLOAD)
+@router.pre_checkout_query(F.invoice_payload == DELETE_PAYLOAD)
 async def pre_checkout_delete(query: PreCheckoutQuery):
     """Telegram требует ответа в течение 10 секунд."""
     await query.answer(ok=True)
@@ -323,7 +331,7 @@ async def pre_checkout_delete(query: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def handle_successful_payment(message: Message, session, state: FSMContext):
     """Обрабатываем успешный платёж — удаляем анкету."""
-    if message.successful_payment.invoice_payload != _DELETE_PAYLOAD:
+    if message.successful_payment.invoice_payload != DELETE_PAYLOAD:
         return  # страховка на случай других инвойсов в будущем
 
     await UserRepository(session).delete(message.from_user.id)
@@ -341,7 +349,7 @@ async def handle_successful_payment(message: Message, session, state: FSMContext
     )
 
 
-# ── Уведомления ──────────────────────────────────────────────────────
+# ── Уведомления ───────────────────────────────────────────────────
 
 @router.callback_query(F.data == "toggle_notifications")
 async def toggle_notifications(call: CallbackQuery, session):
@@ -359,34 +367,12 @@ async def toggle_notifications(call: CallbackQuery, session):
         await call.answer(f"уведомления {label}", show_alert=True)
     except Exception:
         pass
-    # Обновляем кнопку прямо в том же сообщении — один API-вызов
     try:
         await call.message.edit_reply_markup(
-            reply_markup=kb_profile_actions(notifications_on=new_state)
+            reply_markup=kb_profile_actions(
+                notifications_on=new_state,
+                is_active=user.is_active,
+            )
         )
     except Exception:
         pass
-
-
-# ── Геолокация ────────────────────────────────────────────────────────
-
-@router.callback_query(F.data == "update_location")
-async def ask_update_location(call: CallbackQuery, state: FSMContext):
-    await call.answer()
-    await call.message.answer("📡  геолокация.", parse_mode="HTML", reply_markup=kb_location())
-    await state.set_state(EditProfile.new_value)
-    await state.update_data(edit_field="location")
-
-
-@router.message(EditProfile.new_value, F.location)
-async def save_new_location(message: Message, state: FSMContext, session):
-    svc = ProfileService(session)
-    await svc.update_location(
-        message.from_user.id,
-        message.location.latitude,
-        message.location.longitude,
-    )
-    await state.clear()
-    _log.user("update_location: user=%s", message.from_user.id)
-    await message.answer("📡  обновлена.", reply_markup=remove_kb())
-    await message.answer("·", reply_markup=kb_main_menu())

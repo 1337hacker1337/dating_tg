@@ -1,3 +1,6 @@
+"""bot/keyboards/user.py — клавиатуры пользовательской части."""
+from typing import Optional
+
 from aiogram.types import (
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
@@ -38,12 +41,6 @@ def kb_looking_for() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def kb_skip() -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    b.button(text="→ пропустить", callback_data="skip")
-    return b.as_markup()
-
-
 def kb_location() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -64,7 +61,7 @@ def kb_swipe(candidate_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def kb_match(partner_tg_id: int, username: str = None) -> InlineKeyboardMarkup:
+def kb_match(partner_tg_id: int, username: Optional[str] = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if username:
         b.button(text="💬 написать", url=f"https://t.me/{username}")
@@ -76,12 +73,12 @@ def kb_match(partner_tg_id: int, username: str = None) -> InlineKeyboardMarkup:
 
 def kb_profile_actions(notifications_on: bool = True, is_active: bool = True) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="✏️ редактировать",      callback_data="edit_profile")
-    vis   = "🙈 скрыть" if is_active else "👁 показать"
-    b.button(text=vis,                     callback_data="toggle_visibility")
+    b.button(text="✏️ редактировать", callback_data="edit_profile")
+    vis = "🙈 скрыть" if is_active else "👁 показать"
+    b.button(text=vis, callback_data="toggle_visibility")
     notif = "🔔 уведы вкл" if notifications_on else "🔕 уведы выкл"
-    b.button(text=notif,                   callback_data="toggle_notifications")
-    b.button(text="⚰️ удалить анкету",      callback_data="delete_profile")
+    b.button(text=notif, callback_data="toggle_notifications")
+    b.button(text="⚰️ удалить анкету", callback_data="delete_profile")
     b.adjust(1, 1, 1, 1)
     return b.as_markup()
 
