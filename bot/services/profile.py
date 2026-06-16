@@ -35,7 +35,9 @@ class ProfileService:
         return await self.users.get(user_id)
 
     async def update_location(self, user_id, lat, lon):
-        await self.users.update_location(user_id, lat, lon)
+        from bot.utils.geo import reverse_geocode
+        city = await reverse_geocode(lat, lon) if (lat is not None and lon is not None) else None
+        await self.users.update_location(user_id, lat, lon, city=city)
         await self.session.commit()
 
     async def touch(self, user_id):

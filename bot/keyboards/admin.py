@@ -2,6 +2,17 @@
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.constants import PREMIUM_DAYS_PRESETS
+
+
+def kb_admin_grant_periods(target_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for days in PREMIUM_DAYS_PRESETS:
+        b.button(text=f"{days} дней", callback_data=f"adm:grant_do:{target_id}:{days}")
+    b.button(text="◀️ меню", callback_data="adm:menu")
+    b.adjust(2, 2, 1)
+    return b.as_markup()
+
 
 def kb_admin_main() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
@@ -14,6 +25,23 @@ def kb_admin_main() -> InlineKeyboardMarkup:
     b.button(text="👑 администраторы", callback_data="adm:admins")
     b.button(text="📢 реклама",        callback_data="adm:ad_channel")
     b.button(text="🚩 репорты",        callback_data="adm:reports")
+    b.button(text="🔱 выдать shroom+", callback_data="adm:grant_prem")
+    b.button(text="🧪 тест-режим",     callback_data="adm:test")
+    b.adjust(2, 2, 2, 2, 2, 1)
+    return b.as_markup()
+
+
+def kb_admin_testing(fake_count: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="🧪 +10 анкет",        callback_data="adm:test_seed")
+    b.button(text="🩸 5 лайкнут меня",   callback_data="adm:test_likes")
+    b.button(text="💬 записка мне",      callback_data="adm:test_note")
+    b.button(text="👀 7 просмотров",     callback_data="adm:test_views")
+    b.button(text="⚔️ мэтч с фейком",    callback_data="adm:test_match")
+    b.button(text="🩸 ответит на лайк",  callback_data="adm:test_reply")
+    b.button(text="🚩 создать репорт",   callback_data="adm:test_report")
+    b.button(text=f"🧹 удалить тестовые ({fake_count})", callback_data="adm:test_clear")
+    b.button(text="◀️ меню",             callback_data="adm:menu")
     b.adjust(2, 2, 2, 2, 1)
     return b.as_markup()
 
@@ -39,6 +67,7 @@ def kb_admin_user_actions(target_id: int, is_banned: bool) -> InlineKeyboardMark
     else:
         b.button(text="🚷 забанить",  callback_data=f"adm:do_ban:{target_id}")
     b.button(text="🧬 сбросить калибровку", callback_data=f"adm:do_reset_cal:{target_id}")
+    b.button(text="🔱 +30д shroom+",        callback_data=f"adm:do_grant_prem:{target_id}")
     b.button(text="◀️ меню",                callback_data="adm:menu")
     b.adjust(1)
     return b.as_markup()

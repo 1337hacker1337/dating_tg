@@ -49,6 +49,29 @@ async def _run_migrations() -> None:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
             "notifications_enabled BOOLEAN NOT NULL DEFAULT TRUE"
         ))
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "bonus_swipes INTEGER NOT NULL DEFAULT 0"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "premium_until TIMESTAMPTZ"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS age_min SMALLINT"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS age_max SMALLINT"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS max_distance_km SMALLINT"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS city VARCHAR(64)"
+        ))
     _log.info("db ready")
 
 
@@ -69,10 +92,15 @@ async def _ensure_first_admin() -> None:
 def build_dispatcher() -> Dispatcher:
     dp = Dispatcher()
 
-    # Порядок важен: сессия → бан/last_seen → троттлинг → подписка
+    # Антиспам — раньше всего (outer на update): отсекает спам до сессии/бана
+    # и до хэндлеров, для сообщений и колбэков сразу. Один экземпляр —
+    # общие кулдауны по user_id (callback 0.6с / меню 1.0с / команды 2.0с).
+    throttle = CommandThrottleMiddleware()
+    dp.update.outer_middleware(throttle)
+
+    # Порядок важен: сессия → бан/last_seen → подписка
     dp.update.middleware(SessionMiddleware())
     dp.update.middleware(BanCheckMiddleware())
-    dp.update.middleware(CommandThrottleMiddleware())
     dp.update.middleware(SubscriptionMiddleware())
 
     dp.include_router(admin_router)

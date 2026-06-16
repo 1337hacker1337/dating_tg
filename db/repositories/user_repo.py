@@ -35,9 +35,15 @@ class UserRepository:
         await self.session.flush()
         return user
 
-    async def update_location(self, user_id, latitude, longitude):
+    async def update_location(self, user_id, latitude, longitude, city=None):
         await self.session.execute(
-            update(User).where(User.id == user_id).values(latitude=latitude, longitude=longitude)
+            update(User).where(User.id == user_id)
+            .values(latitude=latitude, longitude=longitude, city=city)
+        )
+
+    async def set_city(self, user_id: int, city) -> None:
+        await self.session.execute(
+            update(User).where(User.id == user_id).values(city=city)
         )
 
     async def update_username(self, user_id: int, username: Optional[str]) -> None:
@@ -115,6 +121,55 @@ class UserRepository:
         elif current_user.looking_for == LookingForEnum.female:
             base_filter = and_(base_filter, User.gender == GenderEnum.female)
 
+        # ── Фильтр по возрасту (доступен всем) ────────────────────
+        if current_user.age_min is not None:
+            base_filter = and_(base_filter, User.age >= current_user.age_min)
+        if current_user.age_max is not None:
+            base_filter = and_(base_filter, User.age <= current_user.age_max)
+
+        # ── Жёсткий фильтр по дистанции (доступен всем) ──────────
+        if (
+            current_user.max_distance_km
+            and current_user.latitude is not None
+            and current_user.longitude is not None
+        ):
+            d = current_user.max_distance_km / 111.0
+            base_filter = and_(
+                base_filter,
+                User.latitude.isnot(None), User.longitude.isnot(None),
+                User.latitude.between(current_user.latitude - d, current_user.latitude + d),
+                User.longitude.between(current_user.longitude - d, current_user.longitude + d),
+            )
+
+        # SHROOM+ показывается выше в ленте (но не ломает гео-приоритет)
+        now = datetime.now(tz=timezone.utc)
+        prem_priority = case(
+            (and_(User.premium_until.isnot(None), User.premium_until > now), 0),
+            else_=1,
+        )
+
+        # ── Умный подбор ──────────────────────────────────────────
+        # 1) кто меня уже лайкнул — выше всех (максимальный шанс мэтча)
+        liked_me = (
+            select(Like.id).where(
+                Like.from_user == User.id,
+                Like.to_user == current_user.id,
+                Like.value.is_(True),
+            ).exists()
+        )
+        like_boost = case((liked_me, 0), else_=1)
+
+        # 2) взаимный интерес: кандидат ищет мой пол (или «всех») — выше
+        if current_user.gender == GenderEnum.male:
+            wants_me = or_(User.looking_for == LookingForEnum.any,
+                           User.looking_for == LookingForEnum.male)
+        elif current_user.gender == GenderEnum.female:
+            wants_me = or_(User.looking_for == LookingForEnum.any,
+                           User.looking_for == LookingForEnum.female)
+        else:
+            wants_me = (User.looking_for == LookingForEnum.any)
+        mutual = case((wants_me, 0), else_=1)
+
         if current_user.latitude is not None and current_user.longitude is not None:
             lat, lon = current_user.latitude, current_user.longitude
             deg = nearby_radius_km / 111.0
@@ -128,17 +183,18 @@ class UserRepository:
                 (User.latitude - lat) * (User.latitude - lat) +
                 (User.longitude - lon) * (User.longitude - lon)
             )
+            # лайкнувшие → ближние → взаимный интерес → премиум → ближе по дистанции → рандом
             q = (
                 select(User).options(selectinload(User.photos))
                 .where(base_filter)
-                .order_by(priority, dist_sq, func.random())
+                .order_by(like_boost, priority, mutual, prem_priority, dist_sq, func.random())
                 .limit(1)
             )
         else:
             q = (
                 select(User).options(selectinload(User.photos))
                 .where(base_filter)
-                .order_by(func.random())
+                .order_by(like_boost, mutual, prem_priority, func.random())
                 .limit(1)
             )
 
@@ -192,3 +248,105 @@ class UserRepository:
         await self.session.execute(
             update(User).where(User.id.in_(user_ids)).values(notified_at=func.now())
         )
+
+    # ── Рефералы ──────────────────────────────────────────────────
+
+    async def apply_referral(
+        self,
+        new_user_id: int,
+        referrer_id: int,
+        welcome_bonus: int,
+        referrer_bonus: int,
+    ) -> bool:
+        """
+        Привязывает реферера к новичку и начисляет бонусные свайпы обоим.
+        Возвращает True, если начисление выполнено.
+
+        Защита от накруток:
+          • нельзя пригласить самого себя;
+          • реферер должен существовать;
+          • привязка ставится один раз (referred_by уже задан → отказ).
+        """
+        if referrer_id == new_user_id:
+            return False
+
+        referrer = await self.get_light(referrer_id)
+        if referrer is None:
+            return False
+
+        new_user = await self.get_light(new_user_id)
+        if new_user is None or new_user.referred_by is not None:
+            return False
+
+        await self.session.execute(
+            update(User)
+            .where(User.id == new_user_id)
+            .values(
+                referred_by=referrer_id,
+                bonus_swipes=User.bonus_swipes + welcome_bonus,
+            )
+        )
+        await self.session.execute(
+            update(User)
+            .where(User.id == referrer_id)
+            .values(bonus_swipes=User.bonus_swipes + referrer_bonus)
+        )
+        return True
+
+    async def count_referrals(self, user_id: int) -> int:
+        r = await self.session.execute(
+            select(func.count()).select_from(User).where(User.referred_by == user_id)
+        )
+        return r.scalar() or 0
+
+    # ── SHROOM+ ───────────────────────────────────────────────────
+
+    async def grant_premium(self, user_id: int, days: int) -> datetime:
+        """
+        Выдаёт или продлевает премиум. Если уже активен — продлевает от
+        текущей даты окончания (стопкой), иначе от текущего момента.
+        Возвращает новую дату окончания.
+        """
+        now  = datetime.now(tz=timezone.utc)
+        user = await self.get_light(user_id)
+        base = (
+            user.premium_until
+            if (user and user.premium_until and user.premium_until > now)
+            else now
+        )
+        new_until = base + timedelta(days=days)
+        await self.session.execute(
+            update(User).where(User.id == user_id).values(premium_until=new_until)
+        )
+        return new_until
+
+    async def is_premium(self, user_id: int) -> bool:
+        user = await self.get_light(user_id)
+        return bool(user and user.is_premium)
+
+    async def count_premium(self) -> int:
+        now = datetime.now(tz=timezone.utc)
+        r = await self.session.execute(
+            select(func.count()).select_from(User).where(User.premium_until > now)
+        )
+        return r.scalar() or 0
+
+    # ── Фильтры поиска ────────────────────────────────────────────
+
+    async def set_age_filter(self, user_id: int, age_min, age_max) -> None:
+        await self.session.execute(
+            update(User).where(User.id == user_id).values(age_min=age_min, age_max=age_max)
+        )
+
+    async def set_max_distance(self, user_id: int, km) -> None:
+        await self.session.execute(
+            update(User).where(User.id == user_id).values(max_distance_km=km)
+        )
+
+    async def reset_filters(self, user_id: int) -> None:
+        await self.session.execute(
+            update(User).where(User.id == user_id).values(
+                age_min=None, age_max=None, max_distance_km=None
+            )
+        )
+

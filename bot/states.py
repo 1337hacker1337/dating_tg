@@ -20,6 +20,14 @@ class EditProfile(StatesGroup):
     new_photo = State()
 
 
+class LikeMsgState(StatesGroup):
+    waiting_text = State()
+
+
+class FiltersState(StatesGroup):
+    age = State()
+
+
 # ── Админ ─────────────────────────────────────────────────────────
 
 class AdminBan(StatesGroup):
@@ -42,6 +50,10 @@ class AdminBroadcast(StatesGroup):
 class AdminCalibration(StatesGroup):
     waiting_id    = State()
     waiting_votes = State()
+
+
+class AdminGrantPremium(StatesGroup):
+    waiting_id = State()
 
 
 class AdminAdChannel(StatesGroup):

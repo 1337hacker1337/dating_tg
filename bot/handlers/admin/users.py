@@ -9,8 +9,8 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import logger as log
-from bot.keyboards import kb_admin_back, kb_admin_user_actions, kb_admins_list
-from bot.states import AdminBan, AdminUnban, AdminLookup, AdminCalibration
+from bot.keyboards import kb_admin_back, kb_admin_user_actions, kb_admins_list, kb_admin_grant_periods
+from bot.states import AdminBan, AdminUnban, AdminLookup, AdminCalibration, AdminGrantPremium
 from bot.utils.rating import format_rating_line
 from db.models import User
 from db.repositories.admin_repo import AdminRepository
@@ -297,3 +297,65 @@ async def adm_remove_admin(call: CallbackQuery, session: AsyncSession):
         await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb_admins_list(admins))
     except Exception:
         await call.message.answer(text, parse_mode="HTML", reply_markup=kb_admins_list(admins))
+
+
+# ── 🔱 Тестовая выдача SHROOM+ (с выбором срока) ──────────────────
+
+async def _ask_grant_period(target_id: int, session: AsyncSession, reply_to) -> None:
+    user = await UserRepository(session).get_light(target_id)
+    if user is None:
+        await reply_to.answer("не найдено.", reply_markup=kb_admin_back())
+        return
+    mention = f"@{user.username}" if user.username else str(target_id)
+    status  = " (уже premium)" if getattr(user, "is_premium", False) else ""
+    await reply_to.answer(
+        f"🔱 выдать SHROOM+ для <b>{user.name}</b> · {mention}{status}\nвыбери срок:",
+        parse_mode="HTML", reply_markup=kb_admin_grant_periods(target_id),
+    )
+
+
+@router.callback_query(F.data == "adm:grant_prem")
+async def adm_grant_prem_start(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await call.message.answer(
+        "🔱 telegram ID для выдачи SHROOM+:",
+        parse_mode="HTML", reply_markup=kb_admin_back(),
+    )
+    await state.set_state(AdminGrantPremium.waiting_id)
+
+
+@router.message(AdminGrantPremium.waiting_id)
+async def adm_grant_prem_id(message: Message, state: FSMContext, session: AsyncSession):
+    raw = (message.text or "").strip()
+    if not raw.lstrip("-").isdigit():
+        await message.answer("↑ числовой ID.")
+        return
+    await state.clear()
+    await _ask_grant_period(int(raw), session, message)
+
+
+@router.callback_query(F.data.startswith("adm:do_grant_prem:"))
+async def adm_grant_prem_from_card(call: CallbackQuery, session: AsyncSession):
+    await call.answer()
+    await _ask_grant_period(int(call.data.split(":")[2]), session, call.message)
+
+
+@router.callback_query(F.data.startswith("adm:grant_do:"))
+async def adm_grant_do(call: CallbackQuery, session: AsyncSession):
+    _, _, target_str, days_str = call.data.split(":")
+    target_id, days = int(target_str), int(days_str)
+    repo = UserRepository(session)
+    user = await repo.get_light(target_id)
+    if user is None:
+        await call.answer("не найдено.", show_alert=True)
+        return
+    until = await repo.grant_premium(target_id, days)
+    await session.commit()
+    _log.user("admin grant_premium: admin=%s target=%s days=%d until=%s",
+              call.from_user.id, target_id, days, until.isoformat())
+    await call.answer(f"🔱 выдано на {days} дней", show_alert=False)
+    await call.message.answer(
+        f"🔱 SHROOM+ выдан <code>{target_id}</code> на {days} дней.\n"
+        f"до {until.strftime('%d.%m.%Y %H:%M UTC')}",
+        parse_mode="HTML", reply_markup=kb_admin_back(),
+    )

@@ -20,13 +20,15 @@ async def _stats_text(session: AsyncSession) -> str:
     total  = await repo.count_total()
     active = await repo.count_active()
     banned = await repo.count_banned()
+    premium = await repo.count_premium()
     likes_r   = await session.execute(
         select(func.count()).select_from(Like).where(Like.value.is_(True))
     )
     matches_r = await session.execute(select(func.count()).select_from(Match))
     return (
         "<b>📊 статистика</b>\n\n"
-        f"👥 <code>{total}</code>  ·  ✅ <code>{active}</code>  ·  🚷 <code>{banned}</code>\n\n"
+        f"👥 <code>{total}</code>  ·  ✅ <code>{active}</code>  ·  🚷 <code>{banned}</code>\n"
+        f"✦ <code>{premium}</code> с SHROOM+\n\n"
         f"🩸 <code>{likes_r.scalar()}</code>  ·  ⚔️ <code>{matches_r.scalar()}</code>"
     )
 

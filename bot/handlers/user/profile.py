@@ -30,7 +30,7 @@ router = Router(name="profile")
 @router.callback_query(F.data == "menu")
 async def show_menu(call: CallbackQuery):
     await call.answer()
-    await call.message.answer("·", reply_markup=kb_main_menu())
+    await call.message.answer("🍄 меню", reply_markup=kb_main_menu())
 
 
 @router.message(F.text.in_({"👁️ профиль", "👁️ Профиль"}))
@@ -129,7 +129,7 @@ async def set_gender(call: CallbackQuery, session):
     )
     await session.commit()
     await call.answer("сохранено.", show_alert=True)
-    await call.message.answer("·", reply_markup=kb_main_menu())
+    await call.message.answer("🍄 меню", reply_markup=kb_main_menu())
 
 
 @router.callback_query(F.data.startswith("set_lf:"))
@@ -140,7 +140,7 @@ async def set_looking_for(call: CallbackQuery, session):
     )
     await session.commit()
     await call.answer("сохранено.", show_alert=True)
-    await call.message.answer("·", reply_markup=kb_main_menu())
+    await call.message.answer("🍄 меню", reply_markup=kb_main_menu())
 
 
 # ── Геолокация ────────────────────────────────────────────────────
@@ -168,7 +168,7 @@ async def save_new_location(message: Message, state: FSMContext, session):
     await state.clear()
     _log.user("update_location: user=%s", message.from_user.id)
     await message.answer("📡  обновлена.", reply_markup=remove_kb())
-    await message.answer("·", reply_markup=kb_main_menu())
+    await message.answer("🍄 меню", reply_markup=kb_main_menu())
 
 
 @router.message(EditProfile.new_value, F.text)
@@ -217,7 +217,7 @@ async def apply_edit_value(message: Message, state: FSMContext, session):
         if (message.text or "").strip() == "→ пропустить":
             await state.clear()
             await message.answer("без изменений.", reply_markup=remove_kb())
-            await message.answer("·", reply_markup=kb_main_menu())
+            await message.answer("🍄 меню", reply_markup=kb_main_menu())
             return
         await message.answer(
             "📡  нажми «📍 поделиться геолокацией» или «→ пропустить».",
@@ -328,12 +328,9 @@ async def pre_checkout_delete(query: PreCheckoutQuery):
     await query.answer(ok=True)
 
 
-@router.message(F.successful_payment)
+@router.message(F.successful_payment.invoice_payload == DELETE_PAYLOAD)
 async def handle_successful_payment(message: Message, session, state: FSMContext):
     """Обрабатываем успешный платёж — удаляем анкету."""
-    if message.successful_payment.invoice_payload != DELETE_PAYLOAD:
-        return  # страховка на случай других инвойсов в будущем
-
     await UserRepository(session).delete(message.from_user.id)
     await session.commit()
     await state.clear()
