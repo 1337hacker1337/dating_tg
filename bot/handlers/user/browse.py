@@ -669,6 +669,27 @@ async def views_page(call: CallbackQuery, bot: Bot, session):
     )
 
 
+@router.callback_query(F.data.startswith("views_react:"))
+async def views_react(call: CallbackQuery, bot: Bot, session, db_user=None):
+    _, action, vid = call.data.split(":")
+    viewer_id = int(vid)
+    svc    = BrowseService(session)
+    result = await svc.react(call.from_user.id, viewer_id, liked=(action == "like"))
+    await call.answer("🩸" if action == "like" else "🤮")
+
+    if action == "like" and result.is_new_match and result.partner:
+        await _send_match_notification(call.from_user.id, result.partner, bot, session)
+        me = await svc.users.get(call.from_user.id)
+        if me:
+            await _send_match_notification(result.partner.id, me, bot, session)
+
+    # реакция убрала текущего из списка → показываем следующего смотревшего
+    await _show_views_page(
+        call.from_user.id, bot, session, page=0,
+        delete_msg_id=call.message.message_id,
+    )
+
+
 async def _show_views_page(user_id, bot, session, page, delete_msg_id=None):
     if delete_msg_id:
         try:
@@ -679,7 +700,7 @@ async def _show_views_page(user_id, bot, session, page, delete_msg_id=None):
     vrepo = ProfileViewRepository(session)
     total = await vrepo.count_viewers(user_id)
     if total == 0:
-        await bot.send_message(user_id, "👀 твою анкету ещё никто не смотрел.")
+        await bot.send_message(user_id, "👀 в списке «кто смотрел» сейчас пусто.")
         return
 
     urepo = UserRepository(session)
@@ -717,8 +738,8 @@ async def _show_views_page(user_id, bot, session, page, delete_msg_id=None):
     b.button(text=f"{page + 1}/{total}", callback_data="noop")
     if page < total - 1:
         b.button(text="→", callback_data=f"views_page:{page + 1}")
-    b.button(text="🩸", callback_data=f"likeback:{viewer.id}")
-    b.button(text="🤮", callback_data=f"likemsg_pass:{viewer.id}")
+    b.button(text="🩸", callback_data=f"views_react:like:{viewer.id}")
+    b.button(text="🤮", callback_data=f"views_react:dislike:{viewer.id}")
     b.button(text="🚩", callback_data=f"report:start:{viewer.id}")
     b.adjust(3, 2, 1)
 
