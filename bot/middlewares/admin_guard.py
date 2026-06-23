@@ -19,9 +19,9 @@ class AdminMiddleware(BaseMiddleware):
         repo = AdminRepository(session)
         if not await repo.is_admin(user.id):
             if isinstance(event, CallbackQuery):
-                await event.answer("⛔ Нет доступа.", show_alert=True)
+                await event.answer("⛔  нет доступа.", show_alert=True)
             elif isinstance(event, Message):
-                await event.answer("⛔ Нет доступа.")
+                await event.answer("⛔  нет доступа.")
             _log.warning("non-admin tried admin panel: user=%s", user.id)
             return
         data["admin_repo"] = repo

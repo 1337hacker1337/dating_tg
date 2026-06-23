@@ -11,10 +11,10 @@ from sqlalchemy import update
 
 from bot import logger as log
 from bot.constants import (
-    NAME_MAX_LEN, BIO_MAX_LEN, AGE_MIN, AGE_MAX,
+    NAME_MAX_LEN, BIO_MAX_LEN, AGE_MIN, AGE_MAX, MAX_PHOTOS,
     DELETE_PAYLOAD, DELETE_STARS,
 )
-from bot.keyboards import kb_main_menu, kb_profile_actions, kb_location, remove_kb
+from bot.keyboards import kb_main_menu, kb_profile_actions, kb_location, remove_kb, kb_photos_collect
 from bot.services import ProfileService
 from bot.states import EditProfile
 from bot.utils.formatting import own_profile_text
@@ -54,6 +54,9 @@ async def _send_profile(user_id, msg, session):
     kb = kb_profile_actions(
         notifications_on=user.notifications_enabled,
         is_active=user.is_active,
+        photo_idx=0,
+        photo_count=len(user.photos),
+        owner_id=user.id,
     )
     if user.photos:
         await msg.answer_photo(
@@ -117,8 +120,12 @@ async def edit_field_start(call: CallbackQuery, state: FSMContext):
         b.adjust(2, 1)
         await call.message.answer("ищешь —", parse_mode="HTML", reply_markup=b.as_markup())
     elif field == "photos":
-        await call.message.answer("фото.  <i>заменит текущее</i>", parse_mode="HTML")
+        await call.message.answer(
+            f"фото.  <i>пришли до {MAX_PHOTOS} штук — заменят текущие</i>",
+            parse_mode="HTML",
+        )
         await state.set_state(EditProfile.new_photo)
+        await state.update_data(edit_photos=[])
 
 
 @router.callback_query(F.data.startswith("set_gender:"))
@@ -229,14 +236,65 @@ async def apply_edit_value(message: Message, state: FSMContext, session):
 
 
 @router.message(EditProfile.new_photo, F.photo)
-async def collect_edit_photo(message: Message, state: FSMContext, session):
+async def collect_edit_photo(message: Message, state: FSMContext, session, bot: Bot):
+    data   = await state.get_data()
+    photos = list(data.get("edit_photos", []))
+
+    if len(photos) >= MAX_PHOTOS:
+        await message.answer(f"↑ уже {MAX_PHOTOS} — это максимум. жми «готово».")
+        return
+
     file_id = message.photo[-1].file_id
-    repo    = UserRepository(session)
-    await repo.delete_photos(message.from_user.id)
-    await repo.add_photo(message.from_user.id, file_id)
+    if file_id not in photos:
+        photos.append(file_id)
+        await state.update_data(edit_photos=photos)
+
+    if len(photos) >= MAX_PHOTOS:
+        await _apply_edit_photos(message, message.from_user.id, state, session)
+        return
+
+    await message.answer(
+        f"📷  {len(photos)}/{MAX_PHOTOS}.  пришли ещё или жми «готово».",
+        reply_markup=kb_photos_collect(len(photos), can_finish=True, prefix="ephotos"),
+    )
+
+
+@router.callback_query(EditProfile.new_photo, F.data == "ephotos:clear")
+async def edit_photos_clear(call: CallbackQuery, state: FSMContext):
+    await state.update_data(edit_photos=[])
+    await call.answer("сброшено")
+    try:
+        await call.message.edit_text(f"пришли фото заново  <i>(до {MAX_PHOTOS})</i>.",
+                                     parse_mode="HTML")
+    except Exception:
+        pass
+
+
+@router.callback_query(EditProfile.new_photo, F.data == "ephotos:done")
+async def edit_photos_done(call: CallbackQuery, state: FSMContext, session):
+    data = await state.get_data()
+    if not data.get("edit_photos"):
+        await call.answer("нужно хотя бы одно фото.", show_alert=True)
+        return
+    await call.answer()
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _apply_edit_photos(call.message, call.from_user.id, state, session)
+
+
+async def _apply_edit_photos(target, user_id: int, state: FSMContext, session) -> None:
+    data   = await state.get_data()
+    photos = data.get("edit_photos", [])
+    repo   = UserRepository(session)
+    await repo.delete_photos(user_id)
+    for fid in photos:
+        await repo.add_photo(user_id, fid)
     await session.commit()
     await state.clear()
-    await message.answer("фото → ok", reply_markup=kb_main_menu())
+    _log.user("edit_photos: user=%s count=%d", user_id, len(photos))
+    await target.answer(f"фото обновлены  ·  {len(photos)} шт.", reply_markup=kb_main_menu())
 
 
 # ── Видимость профиля ─────────────────────────────────────────────
@@ -244,7 +302,7 @@ async def collect_edit_photo(message: Message, state: FSMContext, session):
 @router.callback_query(F.data == "toggle_visibility")
 async def toggle_visibility(call: CallbackQuery, session):
     repo = UserRepository(session)
-    user = await repo.get_light(call.from_user.id)
+    user = await repo.get(call.from_user.id)
     if user is None:
         await call.answer()
         return
@@ -261,6 +319,8 @@ async def toggle_visibility(call: CallbackQuery, session):
             reply_markup=kb_profile_actions(
                 notifications_on=user.notifications_enabled,
                 is_active=new_state,
+                photo_count=len(user.photos),
+                owner_id=user.id,
             )
         )
     except Exception:
@@ -351,7 +411,7 @@ async def handle_successful_payment(message: Message, session, state: FSMContext
 @router.callback_query(F.data == "toggle_notifications")
 async def toggle_notifications(call: CallbackQuery, session):
     repo = UserRepository(session)
-    user = await repo.get_light(call.from_user.id)
+    user = await repo.get(call.from_user.id)
     if user is None:
         await call.answer()
         return
@@ -369,6 +429,8 @@ async def toggle_notifications(call: CallbackQuery, session):
             reply_markup=kb_profile_actions(
                 notifications_on=new_state,
                 is_active=user.is_active,
+                photo_count=len(user.photos),
+                owner_id=user.id,
             )
         )
     except Exception:

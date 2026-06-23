@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot import logger as log
 from bot.constants import (
-    NAME_MAX_LEN, BIO_MAX_LEN, AGE_MIN, AGE_MAX,
+    NAME_MAX_LEN, BIO_MAX_LEN, AGE_MIN, AGE_MAX, MAX_PHOTOS,
     REFERRAL_PREFIX, REFERRAL_BONUS_SWIPES, REFERRAL_WELCOME_SWIPES,
 )
-from bot.keyboards import kb_gender, kb_looking_for, kb_location, kb_main_menu, remove_kb
+from bot.keyboards import (
+    kb_gender, kb_looking_for, kb_location, kb_main_menu, remove_kb, kb_photos_collect,
+)
 from bot.services import ProfileService
 from bot.states import Registration
 from db.repositories.user_repo import UserRepository
@@ -154,23 +156,76 @@ async def reg_location_skip(message: Message, state: FSMContext):
 
 async def _ask_photo(message, state):
     await message.answer(
-        f"{_progress(7)}\n\nфото.\n<i>одно — обязательно</i>", parse_mode="HTML"
+        f"{_progress(7)}\n\nфото.\n<i>одно обязательно, до {MAX_PHOTOS} — пришли сколько хочешь</i>",
+        parse_mode="HTML",
     )
+    await state.update_data(photos=[])
     await state.set_state(Registration.photos)
 
 
 @router.message(Registration.photos, F.photo)
 async def reg_photo(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    data   = await state.get_data()
+    photos = list(data.get("photos", []))
+
+    if len(photos) >= MAX_PHOTOS:
+        await message.answer(f"↑ уже {MAX_PHOTOS} — это максимум. жми «готово».")
+        return
+
     file_id = message.photo[-1].file_id
+    if file_id not in photos:
+        photos.append(file_id)
+        await state.update_data(photos=photos)
+
+    if len(photos) >= MAX_PHOTOS:
+        await _finalize_registration(message, message.from_user, state, session, bot)
+        return
+
+    await message.answer(
+        f"📷  {len(photos)}/{MAX_PHOTOS}.  пришли ещё или жми «готово».",
+        reply_markup=kb_photos_collect(len(photos), can_finish=True),
+    )
+
+
+@router.callback_query(Registration.photos, F.data == "photos:clear")
+async def reg_photos_clear(call: CallbackQuery, state: FSMContext):
+    await state.update_data(photos=[])
+    await call.answer("сброшено")
+    try:
+        await call.message.edit_text(f"фото очищены. пришли заново  <i>(до {MAX_PHOTOS})</i>.",
+                                     parse_mode="HTML")
+    except Exception:
+        pass
+
+
+@router.callback_query(Registration.photos, F.data == "photos:done")
+async def reg_photos_done(call: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
     data = await state.get_data()
-    svc = ProfileService(session)
+    if not data.get("photos"):
+        await call.answer("нужно хотя бы одно фото.", show_alert=True)
+        return
+    await call.answer()
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _finalize_registration(call.message, call.from_user, state, session, bot)
+
+
+async def _finalize_registration(target, tg_user, state: FSMContext,
+                                 session: AsyncSession, bot: Bot) -> None:
+    """Создаёт анкету со всеми собранными фото и начисляет реферальные бонусы."""
+    data   = await state.get_data()
+    photos = data.get("photos", [])
+    svc    = ProfileService(session)
     user = await svc.register(
-        user_id=message.from_user.id, username=message.from_user.username,
+        user_id=tg_user.id, username=tg_user.username,
         name=data["name"], age=data["age"], gender=data["gender"],
         looking_for=data["looking_for"], bio=data.get("bio"),
         latitude=data.get("latitude"), longitude=data.get("longitude"),
     )
-    await svc.add_photo(user.id, file_id)
+    for fid in photos:
+        await svc.add_photo(user.id, fid)
 
     # город по координатам (необязательно; при ошибке — просто без города)
     if data.get("latitude") is not None and data.get("longitude") is not None:
@@ -204,12 +259,12 @@ async def reg_photo(message: Message, state: FSMContext, session: AsyncSession, 
                 _log.warning("referral notify failed referrer=%s: %s", ref_id, e)
 
     await state.clear()
-    _log.user("register: user=%s name=%s", message.from_user.id, data["name"])
+    _log.user("register: user=%s name=%s photos=%d", tg_user.id, data["name"], len(photos))
 
     welcome = ""
     if ref_ok:
         welcome = f"\n\n<i>+{REFERRAL_WELCOME_SWIPES} свайпов за вход по приглашению.</i>"
-    await message.answer(
+    await target.answer(
         f"готово, <b>{data['name']}</b>.\n\n<i>добро пожаловать в темноту.</i>{welcome}",
         parse_mode="HTML", reply_markup=kb_main_menu(),
     )

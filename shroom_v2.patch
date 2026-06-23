@@ -1,0 +1,834 @@
+From d610f2fe0cb64dbba7bd4aae02ce7481ff7e265f Mon Sep 17 00:00:00 2001
+From: shroom <bot@local>
+Date: Tue, 23 Jun 2026 20:15:08 +0000
+Subject: [PATCH] =?UTF-8?q?v2:=20=D0=BC=D1=83=D0=BB=D1=8C=D1=82=D0=B8-?=
+ =?UTF-8?q?=D1=84=D0=BE=D1=82=D0=BE=20=D0=B3=D0=B0=D0=BB=D0=B5=D1=80=D0=B5?=
+ =?UTF-8?q?=D1=8F,=20=D0=BA=D0=BE=D0=BC=D0=B0=D0=BD=D0=B4=D0=BD=D0=BE?=
+ =?UTF-8?q?=D0=B5=20=D0=BC=D0=B5=D0=BD=D1=8E,=20=D0=B5=D0=B4=D0=B8=D0=BD?=
+ =?UTF-8?q?=D1=8B=D0=B9=20=D0=BC=D0=B8=D0=BD=D0=B8=D0=BC=D0=B0=D0=BB=D0=B8?=
+ =?UTF-8?q?=D1=81=D1=82=D0=B8=D1=87=D0=BD=D1=8B=D0=B9=20=D1=81=D1=82=D0=B8?=
+ =?UTF-8?q?=D0=BB=D1=8C,=20=D0=BF=D0=BE=D0=BB=D0=B8=D1=88=D0=B8=D0=BD?=
+ =?UTF-8?q?=D0=B3?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ README.md                      |   9 +++
+ bot/handlers/user/browse.py    | 140 ++++++++++++++++++++++-----------
+ bot/handlers/user/profile.py   |  82 ++++++++++++++++---
+ bot/handlers/user/start.py     |  71 +++++++++++++++--
+ bot/keyboards/__init__.py      |   1 +
+ bot/keyboards/user.py          | 115 +++++++++++++++++++++++++--
+ bot/main.py                    |  29 +++++++
+ bot/middlewares/admin_guard.py |   4 +-
+ bot/middlewares/ban_check.py   |   6 +-
+ db/repositories/admin_repo.py  |   4 +
+ 10 files changed, 385 insertions(+), 76 deletions(-)
+
+diff --git a/README.md b/README.md
+index a037d64..24b0c22 100644
+--- a/README.md
++++ b/README.md
+@@ -2,6 +2,15 @@
+ 
+ aiogram 3 · SQLAlchemy 2 (async) · PostgreSQL · APScheduler · Telegram Stars
+ 
++## v2 — полишинг, мульти-фото, единый стиль
++
++| Что | Где |
++|-----|-----|
++| **Мульти-фото.** Раньше `MAX_PHOTOS=5` был заявлен, но юзеру было доступно ровно одно фото. Теперь анкета собирает до 5 фото (с кнопкой «готово»), редактор заменяет весь набор, а в карточках появилось листание галереи `‹ 2/3 ›`. | `start.py`, `profile.py`, `keyboards/user.py`, `browse.py` |
++| **Единая галерея.** Один обработчик `gal:<ctx>:<owner>:<idx>:<page>` листает фото на месте (edit_message_media) в ленте, лайках, мэтчах, просмотрах и своём профиле — без дублирования логики. | `browse.py` |
++| **Командное меню.** Добавлен `set_my_commands`: базовый набор (`/start /premium /filters /views /invite /rules`) — всем, `/admin` — персональным scope только администраторам. | `main.py` |
++| **Единый стиль.** Бан-сообщение и «нет доступа» переписаны из официального «Вы»-тона в общий нижний регистр. Пустые экраны («лента пуста», «лайков пока нет», «мэтчей пока нет», «кто смотрел») сведены к одному спокойному голосу. | `middlewares/*`, `browse.py` |
++
+ ## Запуск
+ 
+ ```bash
+diff --git a/bot/handlers/user/browse.py b/bot/handlers/user/browse.py
+index 1572298..9511df3 100644
+--- a/bot/handlers/user/browse.py
++++ b/bot/handlers/user/browse.py
+@@ -12,9 +12,12 @@ from bot.constants import (
+     SWIPE_LIMIT, SWIPE_WINDOW_HOURS, PREMIUM_SWIPE_LIMIT,
+     LIKE_MSG_LIMIT_PER_HOUR, LIKE_MSG_MAX_LEN, MENU_BUTTON_TEXTS,
+ )
+-from bot.keyboards import kb_main_menu, kb_match, kb_swipe
++from bot.keyboards import (
++    kb_main_menu, kb_match, kb_swipe,
++    kb_likes_card, kb_matches_card, kb_views_card, kb_profile_actions,
++)
+ from bot.services import BrowseService
+-from bot.utils.formatting import fmt_delta, fmt_ago, profile_caption
++from bot.utils.formatting import fmt_delta, fmt_ago, profile_caption, own_profile_text
+ from bot.states import LikeMsgState
+ from config import settings
+ from db.repositories.admin_repo import AdminRepository
+@@ -65,7 +68,7 @@ async def _swipe_limit_exceeded(user_id: int, session) -> tuple[bool, str]:
+ 
+ async def _send_card(user_id, bot, candidate, session, viewer=None):
+     caption = await profile_caption(candidate, session, viewer)
+-    kb = kb_swipe(candidate.id)
++    kb = kb_swipe(candidate.id, 0, len(candidate.photos))
+     if candidate.photos:
+         await bot.send_photo(
+             user_id, photo=candidate.photos[0].file_id,
+@@ -96,7 +99,7 @@ async def _edit_to_card(user_id, bot, session, message_id, candidate, viewer) ->
+             media=InputMediaPhoto(
+                 media=candidate.photos[0].file_id, caption=caption, parse_mode="HTML",
+             ),
+-            reply_markup=kb_swipe(candidate.id),
++            reply_markup=kb_swipe(candidate.id, 0, len(candidate.photos)),
+         )
+     except Exception:
+         return False
+@@ -119,7 +122,7 @@ async def _advance_card(user_id, bot, session, message_id, viewer=None):
+         if viewer else None
+     )
+     if candidate is None:
+-        ended = "🍄  на сегодня анкеты закончились.\n<i>загляни позже.</i>"
++        ended = "🕯️  пусто.\n<i>новые анкеты появятся позже.</i>"
+         try:
+             await bot.edit_message_caption(
+                 chat_id=user_id, message_id=message_id,
+@@ -160,7 +163,7 @@ async def show_next(user_id, bot, session, delete_msg_id=None, viewer=None):
+     candidate = await repo.get_next_candidate(viewer, nearby_radius_km=settings.nearby_radius_km)
+     if candidate is None:
+         await bot.send_message(
+-            user_id, "пусто.\n\n<i>загляни позже.</i>",
++            user_id, "🕯️  пусто.\n<i>новые анкеты появятся позже.</i>",
+             parse_mode="HTML", reply_markup=kb_main_menu(),
+         )
+         return
+@@ -248,7 +251,7 @@ async def _show_likes_page(user_id, bot, session, page, delete_msg_id=None):
+     like_repo = LikeRepository(session)
+     total = await like_repo.count_unanswered_likers(user_id)
+     if total == 0:
+-        await bot.send_message(user_id, "лайков нет.")
++        await bot.send_message(user_id, "🩸  лайков пока нет.")
+         return
+ 
+     page     = max(0, min(page, total - 1))
+@@ -271,24 +274,15 @@ async def _show_likes_page(user_id, bot, session, page, delete_msg_id=None):
+         caption += f"💬  «{note}»\n\n"
+     caption += await profile_caption(liker, session, viewer)
+ 
+-    b = InlineKeyboardBuilder()
+-    if page > 0:
+-        b.button(text="←", callback_data=f"likes_page:{page - 1}")
+-    b.button(text=f"{page + 1}/{total}", callback_data="noop")
+-    if page < total - 1:
+-        b.button(text="→", callback_data=f"likes_page:{page + 1}")
+-    b.button(text="🩸", callback_data=f"likes_react:like:{liker.id}:{page}")
+-    b.button(text="🤮", callback_data=f"likes_react:dislike:{liker.id}:{page}")
+-    b.button(text="🚩", callback_data=f"report:start:{liker.id}")
+-    b.adjust(3, 2, 1)
++    kb = kb_likes_card(liker.id, page, total, 0, len(liker.photos))
+ 
+     if liker.photos:
+         await bot.send_photo(
+             user_id, photo=liker.photos[0].file_id,
+-            caption=caption, reply_markup=b.as_markup(), parse_mode="HTML",
++            caption=caption, reply_markup=kb, parse_mode="HTML",
+         )
+     else:
+-        await bot.send_message(user_id, caption, reply_markup=b.as_markup(), parse_mode="HTML")
++        await bot.send_message(user_id, caption, reply_markup=kb, parse_mode="HTML")
+ 
+ 
+ @router.callback_query(F.data.startswith("likes_react:"))
+@@ -320,7 +314,7 @@ async def likes_react(call: CallbackQuery, bot: Bot, session):
+             await bot.delete_message(call.from_user.id, call.message.message_id)
+         except Exception:
+             pass
+-        await bot.send_message(call.from_user.id, "всё.")
++        await bot.send_message(call.from_user.id, "🩸  это все.\n<i>заходи ещё.</i>", parse_mode="HTML")
+         return
+ 
+     await _show_likes_page(
+@@ -358,7 +352,7 @@ async def _show_matches_page(user_id, bot, session, page, delete_msg_id=None):
+     svc     = BrowseService(session)
+     matches = await svc.get_matches(user_id)
+     if not matches:
+-        await bot.send_message(user_id, "мэтчей нет.")
++        await bot.send_message(user_id, "⚔️  мэтчей пока нет.\n<i>лайкай — взаимные появятся здесь.</i>", parse_mode="HTML")
+         return
+ 
+     page    = max(0, min(page, len(matches) - 1))
+@@ -366,26 +360,15 @@ async def _show_matches_page(user_id, bot, session, page, delete_msg_id=None):
+     viewer  = await UserRepository(session).get(user_id)
+     caption = f"⚔️  {page + 1} / {len(matches)}\n\n" + await profile_caption(partner, session, viewer)
+ 
+-    b = InlineKeyboardBuilder()
+-    if page > 0:
+-        b.button(text="←", callback_data=f"matches_page:{page - 1}")
+-    b.button(text=f"{page + 1}/{len(matches)}", callback_data="noop")
+-    if page < len(matches) - 1:
+-        b.button(text="→", callback_data=f"matches_page:{page + 1}")
+-    if partner.username:
+-        b.button(text="💬 написать", url=f"https://t.me/{partner.username}")
+-    else:
+-        b.button(text="💬 написать", callback_data=f"try_write:{partner.id}")
+-    b.button(text="🚩", callback_data=f"report:start:{partner.id}")
+-    b.adjust(3, 1, 1)
++    kb = kb_matches_card(partner.id, partner.username, page, len(matches), 0, len(partner.photos))
+ 
+     if partner.photos:
+         await bot.send_photo(
+             user_id, photo=partner.photos[0].file_id,
+-            caption=caption, reply_markup=b.as_markup(), parse_mode="HTML",
++            caption=caption, reply_markup=kb, parse_mode="HTML",
+         )
+     else:
+-        await bot.send_message(user_id, caption, reply_markup=b.as_markup(), parse_mode="HTML")
++        await bot.send_message(user_id, caption, reply_markup=kb, parse_mode="HTML")
+ 
+ 
+ # ── Уведомления ───────────────────────────────────────────────────
+@@ -700,7 +683,7 @@ async def _show_views_page(user_id, bot, session, page, delete_msg_id=None):
+     vrepo = ProfileViewRepository(session)
+     total = await vrepo.count_viewers(user_id)
+     if total == 0:
+-        await bot.send_message(user_id, "👀 в списке «кто смотрел» сейчас пусто.")
++        await bot.send_message(user_id, "👀  тебя ещё никто не смотрел.")
+         return
+ 
+     urepo = UserRepository(session)
+@@ -732,27 +715,88 @@ async def _show_views_page(user_id, bot, session, page, delete_msg_id=None):
+     when    = fmt_ago(viewed_at)
+     caption = f"👀  {page + 1} / {total}  ·  {when}\n\n" + await profile_caption(viewer, session, me_full)
+ 
+-    b = InlineKeyboardBuilder()
+-    if page > 0:
+-        b.button(text="←", callback_data=f"views_page:{page - 1}")
+-    b.button(text=f"{page + 1}/{total}", callback_data="noop")
+-    if page < total - 1:
+-        b.button(text="→", callback_data=f"views_page:{page + 1}")
+-    b.button(text="🩸", callback_data=f"views_react:like:{viewer.id}")
+-    b.button(text="🤮", callback_data=f"views_react:dislike:{viewer.id}")
+-    b.button(text="🚩", callback_data=f"report:start:{viewer.id}")
+-    b.adjust(3, 2, 1)
++    kb = kb_views_card(viewer.id, page, total, 0, len(viewer.photos))
+ 
+     if viewer.photos:
+         await bot.send_photo(user_id, photo=viewer.photos[0].file_id,
+-                             caption=caption, reply_markup=b.as_markup(), parse_mode="HTML")
++                             caption=caption, reply_markup=kb, parse_mode="HTML")
+     else:
+-        await bot.send_message(user_id, caption, reply_markup=b.as_markup(), parse_mode="HTML")
++        await bot.send_message(user_id, caption, reply_markup=kb, parse_mode="HTML")
+ 
+ 
+ # ── Служебные callback ────────────────────────────────────────────
+ 
+ 
++# ── Листание фото в карточке (галерея) ────────────────────────────
++
++@router.callback_query(F.data.startswith("gal:"))
++async def gallery_nav(call: CallbackQuery, bot: Bot, session, db_user=None):
++    try:
++        _, ctx, owner_s, idx_s, page_s = call.data.split(":")
++        owner_id, idx, page = int(owner_s), int(idx_s), int(page_s)
++    except ValueError:
++        await call.answer()
++        return
++
++    me_id = call.from_user.id
++    urepo = UserRepository(session)
++    owner = await urepo.get(owner_id)
++    if not owner or not owner.photos:
++        await call.answer()
++        return
++
++    n   = len(owner.photos)
++    idx = max(0, min(idx, n - 1))
++    await call.answer()
++
++    # подпись + клавиатура под конкретный раздел
++    if ctx == "f":
++        viewer  = db_user or await urepo.get(me_id)
++        caption = await profile_caption(owner, session, viewer)
++        kb      = kb_swipe(owner_id, idx, n)
++    elif ctx == "p":
++        caption = await own_profile_text(owner, session)
++        kb      = kb_profile_actions(owner.notifications_enabled, owner.is_active,
++                                     idx, n, owner_id)
++    elif ctx == "l":
++        me      = await urepo.get(me_id)
++        total   = await LikeRepository(session).count_unanswered_likers(me_id)
++        note    = await LikeMessageRepository(session).latest_from(owner_id, me_id)
++        caption = f"🩸  {page + 1} / {max(total, 1)}\n\n"
++        if note:
++            caption += f"💬  «{note}»\n\n"
++        caption += await profile_caption(owner, session, me)
++        kb      = kb_likes_card(owner_id, page, max(total, 1), idx, n)
++    elif ctx == "m":
++        me      = await urepo.get(me_id)
++        matches = await BrowseService(session).get_matches(me_id)
++        total   = len(matches) or 1
++        caption = f"⚔️  {page + 1} / {total}\n\n" + await profile_caption(owner, session, me)
++        kb      = kb_matches_card(owner_id, owner.username, page, total, idx, n)
++    elif ctx == "v":
++        me      = await urepo.get(me_id)
++        total   = await ProfileViewRepository(session).count_viewers(me_id)
++        row     = await ProfileViewRepository(session).get_page(me_id, page)
++        when    = fmt_ago(row[1]) if row else ""
++        head    = f"👀  {page + 1} / {max(total, 1)}"
++        if when:
++            head += f"  ·  {when}"
++        caption = head + "\n\n" + await profile_caption(owner, session, me)
++        kb      = kb_views_card(owner_id, page, max(total, 1), idx, n)
++    else:
++        return
++
++    try:
++        await bot.edit_message_media(
++            chat_id=me_id, message_id=call.message.message_id,
++            media=InputMediaPhoto(media=owner.photos[idx].file_id,
++                                  caption=caption, parse_mode="HTML"),
++            reply_markup=kb,
++        )
++    except Exception:
++        pass
++
++
+ @router.callback_query(F.data == "noop")
+ async def noop(call: CallbackQuery):
+     await call.answer()
+diff --git a/bot/handlers/user/profile.py b/bot/handlers/user/profile.py
+index 1496919..7ffd911 100644
+--- a/bot/handlers/user/profile.py
++++ b/bot/handlers/user/profile.py
+@@ -11,10 +11,10 @@ from sqlalchemy import update
+ 
+ from bot import logger as log
+ from bot.constants import (
+-    NAME_MAX_LEN, BIO_MAX_LEN, AGE_MIN, AGE_MAX,
++    NAME_MAX_LEN, BIO_MAX_LEN, AGE_MIN, AGE_MAX, MAX_PHOTOS,
+     DELETE_PAYLOAD, DELETE_STARS,
+ )
+-from bot.keyboards import kb_main_menu, kb_profile_actions, kb_location, remove_kb
++from bot.keyboards import kb_main_menu, kb_profile_actions, kb_location, remove_kb, kb_photos_collect
+ from bot.services import ProfileService
+ from bot.states import EditProfile
+ from bot.utils.formatting import own_profile_text
+@@ -54,6 +54,9 @@ async def _send_profile(user_id, msg, session):
+     kb = kb_profile_actions(
+         notifications_on=user.notifications_enabled,
+         is_active=user.is_active,
++        photo_idx=0,
++        photo_count=len(user.photos),
++        owner_id=user.id,
+     )
+     if user.photos:
+         await msg.answer_photo(
+@@ -117,8 +120,12 @@ async def edit_field_start(call: CallbackQuery, state: FSMContext):
+         b.adjust(2, 1)
+         await call.message.answer("ищешь —", parse_mode="HTML", reply_markup=b.as_markup())
+     elif field == "photos":
+-        await call.message.answer("фото.  <i>заменит текущее</i>", parse_mode="HTML")
++        await call.message.answer(
++            f"фото.  <i>пришли до {MAX_PHOTOS} штук — заменят текущие</i>",
++            parse_mode="HTML",
++        )
+         await state.set_state(EditProfile.new_photo)
++        await state.update_data(edit_photos=[])
+ 
+ 
+ @router.callback_query(F.data.startswith("set_gender:"))
+@@ -229,14 +236,65 @@ async def apply_edit_value(message: Message, state: FSMContext, session):
+ 
+ 
+ @router.message(EditProfile.new_photo, F.photo)
+-async def collect_edit_photo(message: Message, state: FSMContext, session):
++async def collect_edit_photo(message: Message, state: FSMContext, session, bot: Bot):
++    data   = await state.get_data()
++    photos = list(data.get("edit_photos", []))
++
++    if len(photos) >= MAX_PHOTOS:
++        await message.answer(f"↑ уже {MAX_PHOTOS} — это максимум. жми «готово».")
++        return
++
+     file_id = message.photo[-1].file_id
+-    repo    = UserRepository(session)
+-    await repo.delete_photos(message.from_user.id)
+-    await repo.add_photo(message.from_user.id, file_id)
++    if file_id not in photos:
++        photos.append(file_id)
++        await state.update_data(edit_photos=photos)
++
++    if len(photos) >= MAX_PHOTOS:
++        await _apply_edit_photos(message, message.from_user.id, state, session)
++        return
++
++    await message.answer(
++        f"📷  {len(photos)}/{MAX_PHOTOS}.  пришли ещё или жми «готово».",
++        reply_markup=kb_photos_collect(len(photos), can_finish=True, prefix="ephotos"),
++    )
++
++
++@router.callback_query(EditProfile.new_photo, F.data == "ephotos:clear")
++async def edit_photos_clear(call: CallbackQuery, state: FSMContext):
++    await state.update_data(edit_photos=[])
++    await call.answer("сброшено")
++    try:
++        await call.message.edit_text(f"пришли фото заново  <i>(до {MAX_PHOTOS})</i>.",
++                                     parse_mode="HTML")
++    except Exception:
++        pass
++
++
++@router.callback_query(EditProfile.new_photo, F.data == "ephotos:done")
++async def edit_photos_done(call: CallbackQuery, state: FSMContext, session):
++    data = await state.get_data()
++    if not data.get("edit_photos"):
++        await call.answer("нужно хотя бы одно фото.", show_alert=True)
++        return
++    await call.answer()
++    try:
++        await call.message.edit_reply_markup(reply_markup=None)
++    except Exception:
++        pass
++    await _apply_edit_photos(call.message, call.from_user.id, state, session)
++
++
++async def _apply_edit_photos(target, user_id: int, state: FSMContext, session) -> None:
++    data   = await state.get_data()
++    photos = data.get("edit_photos", [])
++    repo   = UserRepository(session)
++    await repo.delete_photos(user_id)
++    for fid in photos:
++        await repo.add_photo(user_id, fid)
+     await session.commit()
+     await state.clear()
+-    await message.answer("фото → ok", reply_markup=kb_main_menu())
++    _log.user("edit_photos: user=%s count=%d", user_id, len(photos))
++    await target.answer(f"фото обновлены  ·  {len(photos)} шт.", reply_markup=kb_main_menu())
+ 
+ 
+ # ── Видимость профиля ─────────────────────────────────────────────
+@@ -244,7 +302,7 @@ async def collect_edit_photo(message: Message, state: FSMContext, session):
+ @router.callback_query(F.data == "toggle_visibility")
+ async def toggle_visibility(call: CallbackQuery, session):
+     repo = UserRepository(session)
+-    user = await repo.get_light(call.from_user.id)
++    user = await repo.get(call.from_user.id)
+     if user is None:
+         await call.answer()
+         return
+@@ -261,6 +319,8 @@ async def toggle_visibility(call: CallbackQuery, session):
+             reply_markup=kb_profile_actions(
+                 notifications_on=user.notifications_enabled,
+                 is_active=new_state,
++                photo_count=len(user.photos),
++                owner_id=user.id,
+             )
+         )
+     except Exception:
+@@ -351,7 +411,7 @@ async def handle_successful_payment(message: Message, session, state: FSMContext
+ @router.callback_query(F.data == "toggle_notifications")
+ async def toggle_notifications(call: CallbackQuery, session):
+     repo = UserRepository(session)
+-    user = await repo.get_light(call.from_user.id)
++    user = await repo.get(call.from_user.id)
+     if user is None:
+         await call.answer()
+         return
+@@ -369,6 +429,8 @@ async def toggle_notifications(call: CallbackQuery, session):
+             reply_markup=kb_profile_actions(
+                 notifications_on=new_state,
+                 is_active=user.is_active,
++                photo_count=len(user.photos),
++                owner_id=user.id,
+             )
+         )
+     except Exception:
+diff --git a/bot/handlers/user/start.py b/bot/handlers/user/start.py
+index c47f3c0..5ff89fd 100644
+--- a/bot/handlers/user/start.py
++++ b/bot/handlers/user/start.py
+@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
+ 
+ from bot import logger as log
+ from bot.constants import (
+-    NAME_MAX_LEN, BIO_MAX_LEN, AGE_MIN, AGE_MAX,
++    NAME_MAX_LEN, BIO_MAX_LEN, AGE_MIN, AGE_MAX, MAX_PHOTOS,
+     REFERRAL_PREFIX, REFERRAL_BONUS_SWIPES, REFERRAL_WELCOME_SWIPES,
+ )
+-from bot.keyboards import kb_gender, kb_looking_for, kb_location, kb_main_menu, remove_kb
++from bot.keyboards import (
++    kb_gender, kb_looking_for, kb_location, kb_main_menu, remove_kb, kb_photos_collect,
++)
+ from bot.services import ProfileService
+ from bot.states import Registration
+ from db.repositories.user_repo import UserRepository
+@@ -154,23 +156,76 @@ async def reg_location_skip(message: Message, state: FSMContext):
+ 
+ async def _ask_photo(message, state):
+     await message.answer(
+-        f"{_progress(7)}\n\nфото.\n<i>одно — обязательно</i>", parse_mode="HTML"
++        f"{_progress(7)}\n\nфото.\n<i>одно обязательно, до {MAX_PHOTOS} — пришли сколько хочешь</i>",
++        parse_mode="HTML",
+     )
++    await state.update_data(photos=[])
+     await state.set_state(Registration.photos)
+ 
+ 
+ @router.message(Registration.photos, F.photo)
+ async def reg_photo(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
++    data   = await state.get_data()
++    photos = list(data.get("photos", []))
++
++    if len(photos) >= MAX_PHOTOS:
++        await message.answer(f"↑ уже {MAX_PHOTOS} — это максимум. жми «готово».")
++        return
++
+     file_id = message.photo[-1].file_id
++    if file_id not in photos:
++        photos.append(file_id)
++        await state.update_data(photos=photos)
++
++    if len(photos) >= MAX_PHOTOS:
++        await _finalize_registration(message, message.from_user, state, session, bot)
++        return
++
++    await message.answer(
++        f"📷  {len(photos)}/{MAX_PHOTOS}.  пришли ещё или жми «готово».",
++        reply_markup=kb_photos_collect(len(photos), can_finish=True),
++    )
++
++
++@router.callback_query(Registration.photos, F.data == "photos:clear")
++async def reg_photos_clear(call: CallbackQuery, state: FSMContext):
++    await state.update_data(photos=[])
++    await call.answer("сброшено")
++    try:
++        await call.message.edit_text(f"фото очищены. пришли заново  <i>(до {MAX_PHOTOS})</i>.",
++                                     parse_mode="HTML")
++    except Exception:
++        pass
++
++
++@router.callback_query(Registration.photos, F.data == "photos:done")
++async def reg_photos_done(call: CallbackQuery, state: FSMContext, session: AsyncSession, bot: Bot):
+     data = await state.get_data()
+-    svc = ProfileService(session)
++    if not data.get("photos"):
++        await call.answer("нужно хотя бы одно фото.", show_alert=True)
++        return
++    await call.answer()
++    try:
++        await call.message.edit_reply_markup(reply_markup=None)
++    except Exception:
++        pass
++    await _finalize_registration(call.message, call.from_user, state, session, bot)
++
++
++async def _finalize_registration(target, tg_user, state: FSMContext,
++                                 session: AsyncSession, bot: Bot) -> None:
++    """Создаёт анкету со всеми собранными фото и начисляет реферальные бонусы."""
++    data   = await state.get_data()
++    photos = data.get("photos", [])
++    svc    = ProfileService(session)
+     user = await svc.register(
+-        user_id=message.from_user.id, username=message.from_user.username,
++        user_id=tg_user.id, username=tg_user.username,
+         name=data["name"], age=data["age"], gender=data["gender"],
+         looking_for=data["looking_for"], bio=data.get("bio"),
+         latitude=data.get("latitude"), longitude=data.get("longitude"),
+     )
+-    await svc.add_photo(user.id, file_id)
++    for fid in photos:
++        await svc.add_photo(user.id, fid)
+ 
+     # город по координатам (необязательно; при ошибке — просто без города)
+     if data.get("latitude") is not None and data.get("longitude") is not None:
+@@ -204,12 +259,12 @@ async def reg_photo(message: Message, state: FSMContext, session: AsyncSession,
+                 _log.warning("referral notify failed referrer=%s: %s", ref_id, e)
+ 
+     await state.clear()
+-    _log.user("register: user=%s name=%s", message.from_user.id, data["name"])
++    _log.user("register: user=%s name=%s photos=%d", tg_user.id, data["name"], len(photos))
+ 
+     welcome = ""
+     if ref_ok:
+         welcome = f"\n\n<i>+{REFERRAL_WELCOME_SWIPES} свайпов за вход по приглашению.</i>"
+-    await message.answer(
++    await target.answer(
+         f"готово, <b>{data['name']}</b>.\n\n<i>добро пожаловать в темноту.</i>{welcome}",
+         parse_mode="HTML", reply_markup=kb_main_menu(),
+     )
+diff --git a/bot/keyboards/__init__.py b/bot/keyboards/__init__.py
+index 1da1098..03eee98 100644
+--- a/bot/keyboards/__init__.py
++++ b/bot/keyboards/__init__.py
+@@ -2,6 +2,7 @@ from bot.keyboards.user import (
+     kb_main_menu, remove_kb, kb_gender, kb_looking_for, kb_location,
+     kb_swipe, kb_match, kb_profile_actions, kb_report_reasons,
+     kb_filters, kb_filter_distance,
++    kb_likes_card, kb_matches_card, kb_views_card, kb_photos_collect,
+ )
+ from bot.keyboards.admin import (
+     kb_admin_main, kb_admin_back, kb_admin_confirm, kb_admin_user_actions,
+diff --git a/bot/keyboards/user.py b/bot/keyboards/user.py
+index 91a63e3..6c2d5d8 100644
+--- a/bot/keyboards/user.py
++++ b/bot/keyboards/user.py
+@@ -7,7 +7,7 @@ from aiogram.types import (
+ )
+ from aiogram.utils.keyboard import InlineKeyboardBuilder
+ 
+-from bot.constants import PREMIUM_BADGE
++from bot.constants import PREMIUM_BADGE, MAX_PHOTOS
+ 
+ 
+ def kb_main_menu() -> ReplyKeyboardMarkup:
+@@ -54,14 +54,104 @@ def kb_location() -> ReplyKeyboardMarkup:
+     )
+ 
+ 
+-def kb_swipe(candidate_id: int) -> InlineKeyboardMarkup:
++# ── Навигация по фото (галерея) ───────────────────────────────────
++# Единый формат callback: gal:<ctx>:<owner_id>:<idx>:<page>
++#   ctx ∈ {f: лента, l: лайки, m: мэтчи, v: просмотры, p: профиль}
++#   page — для пагинируемых разделов (лайки/мэтчи/просмотры); иначе 0.
++# Ряд показывается только когда фото больше одного.
++
++def _photo_nav_buttons(b: InlineKeyboardBuilder, ctx: str, owner_id: int,
++                       idx: int, count: int, page: int = 0) -> int:
++    """Добавляет кнопки листания фото. Возвращает их число (для adjust)."""
++    if count <= 1:
++        return 0
++    n = 0
++    if idx > 0:
++        b.button(text="‹", callback_data=f"gal:{ctx}:{owner_id}:{idx - 1}:{page}")
++        n += 1
++    b.button(text=f"{idx + 1}/{count}", callback_data="noop")
++    n += 1
++    if idx < count - 1:
++        b.button(text="›", callback_data=f"gal:{ctx}:{owner_id}:{idx + 1}:{page}")
++        n += 1
++    return n
++
++
++def kb_swipe(candidate_id: int, photo_idx: int = 0, photo_count: int = 1) -> InlineKeyboardMarkup:
+     b = InlineKeyboardBuilder()
++    nav = _photo_nav_buttons(b, "f", candidate_id, photo_idx, photo_count)
+     b.button(text="🩸", callback_data=f"like:{candidate_id}")
+     b.button(text="🤮", callback_data=f"dislike:{candidate_id}")
+     b.button(text="↩️", callback_data="rewind")
+     b.button(text="💬 лайк+", callback_data=f"likemsg:{candidate_id}")
+     b.button(text="🚩", callback_data=f"report:start:{candidate_id}")
+-    b.adjust(3, 2)
++    rows = ([nav] if nav else []) + [3, 2]
++    b.adjust(*rows)
++    return b.as_markup()
++
++
++def kb_likes_card(liker_id: int, page: int, total: int,
++                  photo_idx: int = 0, photo_count: int = 1) -> InlineKeyboardMarkup:
++    b = InlineKeyboardBuilder()
++    nav = _photo_nav_buttons(b, "l", liker_id, photo_idx, photo_count, page)
++    pager = 0
++    if page > 0:
++        b.button(text="←", callback_data=f"likes_page:{page - 1}")
++        pager += 1
++    b.button(text=f"{page + 1}/{total}", callback_data="noop")
++    pager += 1
++    if page < total - 1:
++        b.button(text="→", callback_data=f"likes_page:{page + 1}")
++        pager += 1
++    b.button(text="🩸", callback_data=f"likes_react:like:{liker_id}:{page}")
++    b.button(text="🤮", callback_data=f"likes_react:dislike:{liker_id}:{page}")
++    b.button(text="🚩", callback_data=f"report:start:{liker_id}")
++    rows = ([nav] if nav else []) + [pager, 2, 1]
++    b.adjust(*rows)
++    return b.as_markup()
++
++
++def kb_matches_card(partner_id: int, username: Optional[str], page: int, total: int,
++                    photo_idx: int = 0, photo_count: int = 1) -> InlineKeyboardMarkup:
++    b = InlineKeyboardBuilder()
++    nav = _photo_nav_buttons(b, "m", partner_id, photo_idx, photo_count, page)
++    pager = 0
++    if page > 0:
++        b.button(text="←", callback_data=f"matches_page:{page - 1}")
++        pager += 1
++    b.button(text=f"{page + 1}/{total}", callback_data="noop")
++    pager += 1
++    if page < total - 1:
++        b.button(text="→", callback_data=f"matches_page:{page + 1}")
++        pager += 1
++    if username:
++        b.button(text="💬 написать", url=f"https://t.me/{username}")
++    else:
++        b.button(text="💬 написать", callback_data=f"try_write:{partner_id}")
++    b.button(text="🚩", callback_data=f"report:start:{partner_id}")
++    rows = ([nav] if nav else []) + [pager, 1, 1]
++    b.adjust(*rows)
++    return b.as_markup()
++
++
++def kb_views_card(viewer_id: int, page: int, total: int,
++                  photo_idx: int = 0, photo_count: int = 1) -> InlineKeyboardMarkup:
++    b = InlineKeyboardBuilder()
++    nav = _photo_nav_buttons(b, "v", viewer_id, photo_idx, photo_count, page)
++    pager = 0
++    if page > 0:
++        b.button(text="←", callback_data=f"views_page:{page - 1}")
++        pager += 1
++    b.button(text=f"{page + 1}/{total}", callback_data="noop")
++    pager += 1
++    if page < total - 1:
++        b.button(text="→", callback_data=f"views_page:{page + 1}")
++        pager += 1
++    b.button(text="🩸", callback_data=f"views_react:like:{viewer_id}")
++    b.button(text="🤮", callback_data=f"views_react:dislike:{viewer_id}")
++    b.button(text="🚩", callback_data=f"report:start:{viewer_id}")
++    rows = ([nav] if nav else []) + [pager, 2, 1]
++    b.adjust(*rows)
+     return b.as_markup()
+ 
+ 
+@@ -75,8 +165,11 @@ def kb_match(partner_tg_id: int, username: Optional[str] = None) -> InlineKeyboa
+     return b.as_markup()
+ 
+ 
+-def kb_profile_actions(notifications_on: bool = True, is_active: bool = True) -> InlineKeyboardMarkup:
++def kb_profile_actions(notifications_on: bool = True, is_active: bool = True,
++                       photo_idx: int = 0, photo_count: int = 1,
++                       owner_id: int = 0) -> InlineKeyboardMarkup:
+     b = InlineKeyboardBuilder()
++    nav = _photo_nav_buttons(b, "p", owner_id, photo_idx, photo_count)
+     # ряд 1: редактирование + фильтры
+     b.button(text="✏️ редактировать", callback_data="edit_profile")
+     b.button(text="🔍 фильтры", callback_data="filters")
+@@ -91,7 +184,8 @@ def kb_profile_actions(notifications_on: bool = True, is_active: bool = True) ->
+     # ряд 4: приглашения + удаление
+     b.button(text="🔗 пригласить", callback_data="invite")
+     b.button(text="⚰️ удалить", callback_data="delete_profile")
+-    b.adjust(2, 2, 2, 2)
++    rows = ([nav] if nav else []) + [2, 2, 2, 2]
++    b.adjust(*rows)
+     return b.as_markup()
+ 
+ 
+@@ -115,6 +209,17 @@ def kb_filter_distance() -> InlineKeyboardMarkup:
+     return b.as_markup()
+ 
+ 
++def kb_photos_collect(count: int, can_finish: bool, prefix: str = "photos") -> InlineKeyboardMarkup:
++    """Клавиатура сбора фото: счётчик + готово/очистить."""
++    b = InlineKeyboardBuilder()
++    if can_finish:
++        b.button(text=f"✓ готово  ·  {count}/{MAX_PHOTOS}", callback_data=f"{prefix}:done")
++    if count:
++        b.button(text="🗑 заново", callback_data=f"{prefix}:clear")
++    b.adjust(1)
++    return b.as_markup()
++
++
+ def kb_report_reasons(target_id: int) -> InlineKeyboardMarkup:
+     b = InlineKeyboardBuilder()
+     b.button(text="📢 спам / реклама",      callback_data=f"report:do:{target_id}:spam")
+diff --git a/bot/main.py b/bot/main.py
+index 94b912c..0b077fa 100644
+--- a/bot/main.py
++++ b/bot/main.py
+@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ from aiogram import Bot, Dispatcher
+ from aiogram.client.default import DefaultBotProperties
+ from aiogram.enums import ParseMode
++from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+ from aiohttp import web
+ from sqlalchemy import text
+@@ -122,9 +123,37 @@ def build_dispatcher() -> Dispatcher:
+ 
+ # ── Запуск ────────────────────────────────────────────────────────
+ 
++async def _set_commands(bot: Bot) -> None:
++    """Командное меню (синяя кнопка «/»). Базовый набор — всем, /admin — только админам."""
++    base = [
++        BotCommand(command="start",   description="анкета · меню"),
++        BotCommand(command="premium", description="✦ shroom+"),
++        BotCommand(command="filters", description="фильтры поиска"),
++        BotCommand(command="views",   description="кто смотрел"),
++        BotCommand(command="invite",  description="пригласить · бонусы"),
++        BotCommand(command="rules",   description="правила"),
++    ]
++    await bot.set_my_commands(base, scope=BotCommandScopeDefault())
++
++    # /admin показываем только администраторам — персональным scope на их чат
++    try:
++        from db.repositories.admin_repo import AdminRepository
++        async with AsyncSessionFactory() as session:
++            admin_ids = await AdminRepository(session).list_ids()
++        admin_cmds = base + [BotCommand(command="admin", description="👑 панель")]
++        for aid in admin_ids:
++            try:
++                await bot.set_my_commands(admin_cmds, scope=BotCommandScopeChat(chat_id=aid))
++            except Exception as e:
++                _log.warning("set admin commands failed for %s: %s", aid, e)
++    except Exception as e:
++        _log.warning("set admin commands skipped: %s", e)
++
++
+ async def _on_startup(bot: Bot) -> None:
+     await _run_migrations()
+     await _ensure_first_admin()
++    await _set_commands(bot)
+ 
+ 
+ async def run_polling() -> None:
+diff --git a/bot/middlewares/admin_guard.py b/bot/middlewares/admin_guard.py
+index 7e313ed..3a8b7fe 100644
+--- a/bot/middlewares/admin_guard.py
++++ b/bot/middlewares/admin_guard.py
+@@ -19,9 +19,9 @@ class AdminMiddleware(BaseMiddleware):
+         repo = AdminRepository(session)
+         if not await repo.is_admin(user.id):
+             if isinstance(event, CallbackQuery):
+-                await event.answer("⛔ Нет доступа.", show_alert=True)
++                await event.answer("⛔  нет доступа.", show_alert=True)
+             elif isinstance(event, Message):
+-                await event.answer("⛔ Нет доступа.")
++                await event.answer("⛔  нет доступа.")
+             _log.warning("non-admin tried admin panel: user=%s", user.id)
+             return
+         data["admin_repo"] = repo
+diff --git a/bot/middlewares/ban_check.py b/bot/middlewares/ban_check.py
+index 369eec3..d85bc56 100644
+--- a/bot/middlewares/ban_check.py
++++ b/bot/middlewares/ban_check.py
+@@ -42,11 +42,11 @@ class BanCheckMiddleware(BaseMiddleware):
+ 
+         if db_user and db_user.is_banned:
+             if isinstance(event, CallbackQuery):
+-                await event.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.", show_alert=True)
++                await event.answer("🚷  доступ закрыт.", show_alert=True)
+             elif isinstance(event, Message):
+-                await event.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.")
++                await event.answer("🚷  доступ закрыт.\n<i>аккаунт заблокирован.</i>", parse_mode="HTML")
+             elif hasattr(event, "message") and event.message:
+-                await event.message.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.")
++                await event.message.answer("🚷  доступ закрыт.\n<i>аккаунт заблокирован.</i>", parse_mode="HTML")
+             _log.warning("banned user blocked: user=%s", user.id)
+             return
+ 
+diff --git a/db/repositories/admin_repo.py b/db/repositories/admin_repo.py
+index b21647c..0b781e1 100644
+--- a/db/repositories/admin_repo.py
++++ b/db/repositories/admin_repo.py
+@@ -35,3 +35,7 @@ class AdminRepository:
+     async def list_all(self) -> list[Admin]:
+         result = await self.session.execute(select(Admin).order_by(Admin.added_at))
+         return list(result.scalars().all())
++
++    async def list_ids(self) -> list[int]:
++        result = await self.session.execute(select(Admin.telegram_id))
++        return [row[0] for row in result.fetchall()]
+-- 
+2.43.0
+

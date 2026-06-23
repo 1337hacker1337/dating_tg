@@ -35,3 +35,7 @@ class AdminRepository:
     async def list_all(self) -> list[Admin]:
         result = await self.session.execute(select(Admin).order_by(Admin.added_at))
         return list(result.scalars().all())
+
+    async def list_ids(self) -> list[int]:
+        result = await self.session.execute(select(Admin.telegram_id))
+        return [row[0] for row in result.fetchall()]

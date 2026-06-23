@@ -12,9 +12,12 @@ from bot.constants import (
     SWIPE_LIMIT, SWIPE_WINDOW_HOURS, PREMIUM_SWIPE_LIMIT,
     LIKE_MSG_LIMIT_PER_HOUR, LIKE_MSG_MAX_LEN, MENU_BUTTON_TEXTS,
 )
-from bot.keyboards import kb_main_menu, kb_match, kb_swipe
+from bot.keyboards import (
+    kb_main_menu, kb_match, kb_swipe,
+    kb_likes_card, kb_matches_card, kb_views_card, kb_profile_actions,
+)
 from bot.services import BrowseService
-from bot.utils.formatting import fmt_delta, fmt_ago, profile_caption
+from bot.utils.formatting import fmt_delta, fmt_ago, profile_caption, own_profile_text
 from bot.states import LikeMsgState
 from config import settings
 from db.repositories.admin_repo import AdminRepository
@@ -65,7 +68,7 @@ async def _swipe_limit_exceeded(user_id: int, session) -> tuple[bool, str]:
 
 async def _send_card(user_id, bot, candidate, session, viewer=None):
     caption = await profile_caption(candidate, session, viewer)
-    kb = kb_swipe(candidate.id)
+    kb = kb_swipe(candidate.id, 0, len(candidate.photos))
     if candidate.photos:
         await bot.send_photo(
             user_id, photo=candidate.photos[0].file_id,
@@ -96,7 +99,7 @@ async def _edit_to_card(user_id, bot, session, message_id, candidate, viewer) ->
             media=InputMediaPhoto(
                 media=candidate.photos[0].file_id, caption=caption, parse_mode="HTML",
             ),
-            reply_markup=kb_swipe(candidate.id),
+            reply_markup=kb_swipe(candidate.id, 0, len(candidate.photos)),
         )
     except Exception:
         return False
@@ -119,7 +122,7 @@ async def _advance_card(user_id, bot, session, message_id, viewer=None):
         if viewer else None
     )
     if candidate is None:
-        ended = "🍄  на сегодня анкеты закончились.\n<i>загляни позже.</i>"
+        ended = "🕯️  пусто.\n<i>новые анкеты появятся позже.</i>"
         try:
             await bot.edit_message_caption(
                 chat_id=user_id, message_id=message_id,
@@ -160,7 +163,7 @@ async def show_next(user_id, bot, session, delete_msg_id=None, viewer=None):
     candidate = await repo.get_next_candidate(viewer, nearby_radius_km=settings.nearby_radius_km)
     if candidate is None:
         await bot.send_message(
-            user_id, "пусто.\n\n<i>загляни позже.</i>",
+            user_id, "🕯️  пусто.\n<i>новые анкеты появятся позже.</i>",
             parse_mode="HTML", reply_markup=kb_main_menu(),
         )
         return
@@ -248,7 +251,7 @@ async def _show_likes_page(user_id, bot, session, page, delete_msg_id=None):
     like_repo = LikeRepository(session)
     total = await like_repo.count_unanswered_likers(user_id)
     if total == 0:
-        await bot.send_message(user_id, "лайков нет.")
+        await bot.send_message(user_id, "🩸  лайков пока нет.")
         return
 
     page     = max(0, min(page, total - 1))
@@ -271,24 +274,15 @@ async def _show_likes_page(user_id, bot, session, page, delete_msg_id=None):
         caption += f"💬  «{note}»\n\n"
     caption += await profile_caption(liker, session, viewer)
 
-    b = InlineKeyboardBuilder()
-    if page > 0:
-        b.button(text="←", callback_data=f"likes_page:{page - 1}")
-    b.button(text=f"{page + 1}/{total}", callback_data="noop")
-    if page < total - 1:
-        b.button(text="→", callback_data=f"likes_page:{page + 1}")
-    b.button(text="🩸", callback_data=f"likes_react:like:{liker.id}:{page}")
-    b.button(text="🤮", callback_data=f"likes_react:dislike:{liker.id}:{page}")
-    b.button(text="🚩", callback_data=f"report:start:{liker.id}")
-    b.adjust(3, 2, 1)
+    kb = kb_likes_card(liker.id, page, total, 0, len(liker.photos))
 
     if liker.photos:
         await bot.send_photo(
             user_id, photo=liker.photos[0].file_id,
-            caption=caption, reply_markup=b.as_markup(), parse_mode="HTML",
+            caption=caption, reply_markup=kb, parse_mode="HTML",
         )
     else:
-        await bot.send_message(user_id, caption, reply_markup=b.as_markup(), parse_mode="HTML")
+        await bot.send_message(user_id, caption, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("likes_react:"))
@@ -320,7 +314,7 @@ async def likes_react(call: CallbackQuery, bot: Bot, session):
             await bot.delete_message(call.from_user.id, call.message.message_id)
         except Exception:
             pass
-        await bot.send_message(call.from_user.id, "всё.")
+        await bot.send_message(call.from_user.id, "🩸  это все.\n<i>заходи ещё.</i>", parse_mode="HTML")
         return
 
     await _show_likes_page(
@@ -358,7 +352,7 @@ async def _show_matches_page(user_id, bot, session, page, delete_msg_id=None):
     svc     = BrowseService(session)
     matches = await svc.get_matches(user_id)
     if not matches:
-        await bot.send_message(user_id, "мэтчей нет.")
+        await bot.send_message(user_id, "⚔️  мэтчей пока нет.\n<i>лайкай — взаимные появятся здесь.</i>", parse_mode="HTML")
         return
 
     page    = max(0, min(page, len(matches) - 1))
@@ -366,26 +360,15 @@ async def _show_matches_page(user_id, bot, session, page, delete_msg_id=None):
     viewer  = await UserRepository(session).get(user_id)
     caption = f"⚔️  {page + 1} / {len(matches)}\n\n" + await profile_caption(partner, session, viewer)
 
-    b = InlineKeyboardBuilder()
-    if page > 0:
-        b.button(text="←", callback_data=f"matches_page:{page - 1}")
-    b.button(text=f"{page + 1}/{len(matches)}", callback_data="noop")
-    if page < len(matches) - 1:
-        b.button(text="→", callback_data=f"matches_page:{page + 1}")
-    if partner.username:
-        b.button(text="💬 написать", url=f"https://t.me/{partner.username}")
-    else:
-        b.button(text="💬 написать", callback_data=f"try_write:{partner.id}")
-    b.button(text="🚩", callback_data=f"report:start:{partner.id}")
-    b.adjust(3, 1, 1)
+    kb = kb_matches_card(partner.id, partner.username, page, len(matches), 0, len(partner.photos))
 
     if partner.photos:
         await bot.send_photo(
             user_id, photo=partner.photos[0].file_id,
-            caption=caption, reply_markup=b.as_markup(), parse_mode="HTML",
+            caption=caption, reply_markup=kb, parse_mode="HTML",
         )
     else:
-        await bot.send_message(user_id, caption, reply_markup=b.as_markup(), parse_mode="HTML")
+        await bot.send_message(user_id, caption, reply_markup=kb, parse_mode="HTML")
 
 
 # ── Уведомления ───────────────────────────────────────────────────
@@ -700,7 +683,7 @@ async def _show_views_page(user_id, bot, session, page, delete_msg_id=None):
     vrepo = ProfileViewRepository(session)
     total = await vrepo.count_viewers(user_id)
     if total == 0:
-        await bot.send_message(user_id, "👀 в списке «кто смотрел» сейчас пусто.")
+        await bot.send_message(user_id, "👀  тебя ещё никто не смотрел.")
         return
 
     urepo = UserRepository(session)
@@ -732,25 +715,86 @@ async def _show_views_page(user_id, bot, session, page, delete_msg_id=None):
     when    = fmt_ago(viewed_at)
     caption = f"👀  {page + 1} / {total}  ·  {when}\n\n" + await profile_caption(viewer, session, me_full)
 
-    b = InlineKeyboardBuilder()
-    if page > 0:
-        b.button(text="←", callback_data=f"views_page:{page - 1}")
-    b.button(text=f"{page + 1}/{total}", callback_data="noop")
-    if page < total - 1:
-        b.button(text="→", callback_data=f"views_page:{page + 1}")
-    b.button(text="🩸", callback_data=f"views_react:like:{viewer.id}")
-    b.button(text="🤮", callback_data=f"views_react:dislike:{viewer.id}")
-    b.button(text="🚩", callback_data=f"report:start:{viewer.id}")
-    b.adjust(3, 2, 1)
+    kb = kb_views_card(viewer.id, page, total, 0, len(viewer.photos))
 
     if viewer.photos:
         await bot.send_photo(user_id, photo=viewer.photos[0].file_id,
-                             caption=caption, reply_markup=b.as_markup(), parse_mode="HTML")
+                             caption=caption, reply_markup=kb, parse_mode="HTML")
     else:
-        await bot.send_message(user_id, caption, reply_markup=b.as_markup(), parse_mode="HTML")
+        await bot.send_message(user_id, caption, reply_markup=kb, parse_mode="HTML")
 
 
 # ── Служебные callback ────────────────────────────────────────────
+
+
+# ── Листание фото в карточке (галерея) ────────────────────────────
+
+@router.callback_query(F.data.startswith("gal:"))
+async def gallery_nav(call: CallbackQuery, bot: Bot, session, db_user=None):
+    try:
+        _, ctx, owner_s, idx_s, page_s = call.data.split(":")
+        owner_id, idx, page = int(owner_s), int(idx_s), int(page_s)
+    except ValueError:
+        await call.answer()
+        return
+
+    me_id = call.from_user.id
+    urepo = UserRepository(session)
+    owner = await urepo.get(owner_id)
+    if not owner or not owner.photos:
+        await call.answer()
+        return
+
+    n   = len(owner.photos)
+    idx = max(0, min(idx, n - 1))
+    await call.answer()
+
+    # подпись + клавиатура под конкретный раздел
+    if ctx == "f":
+        viewer  = db_user or await urepo.get(me_id)
+        caption = await profile_caption(owner, session, viewer)
+        kb      = kb_swipe(owner_id, idx, n)
+    elif ctx == "p":
+        caption = await own_profile_text(owner, session)
+        kb      = kb_profile_actions(owner.notifications_enabled, owner.is_active,
+                                     idx, n, owner_id)
+    elif ctx == "l":
+        me      = await urepo.get(me_id)
+        total   = await LikeRepository(session).count_unanswered_likers(me_id)
+        note    = await LikeMessageRepository(session).latest_from(owner_id, me_id)
+        caption = f"🩸  {page + 1} / {max(total, 1)}\n\n"
+        if note:
+            caption += f"💬  «{note}»\n\n"
+        caption += await profile_caption(owner, session, me)
+        kb      = kb_likes_card(owner_id, page, max(total, 1), idx, n)
+    elif ctx == "m":
+        me      = await urepo.get(me_id)
+        matches = await BrowseService(session).get_matches(me_id)
+        total   = len(matches) or 1
+        caption = f"⚔️  {page + 1} / {total}\n\n" + await profile_caption(owner, session, me)
+        kb      = kb_matches_card(owner_id, owner.username, page, total, idx, n)
+    elif ctx == "v":
+        me      = await urepo.get(me_id)
+        total   = await ProfileViewRepository(session).count_viewers(me_id)
+        row     = await ProfileViewRepository(session).get_page(me_id, page)
+        when    = fmt_ago(row[1]) if row else ""
+        head    = f"👀  {page + 1} / {max(total, 1)}"
+        if when:
+            head += f"  ·  {when}"
+        caption = head + "\n\n" + await profile_caption(owner, session, me)
+        kb      = kb_views_card(owner_id, page, max(total, 1), idx, n)
+    else:
+        return
+
+    try:
+        await bot.edit_message_media(
+            chat_id=me_id, message_id=call.message.message_id,
+            media=InputMediaPhoto(media=owner.photos[idx].file_id,
+                                  caption=caption, parse_mode="HTML"),
+            reply_markup=kb,
+        )
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data == "noop")

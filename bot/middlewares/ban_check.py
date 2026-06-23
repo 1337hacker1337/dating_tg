@@ -42,11 +42,11 @@ class BanCheckMiddleware(BaseMiddleware):
 
         if db_user and db_user.is_banned:
             if isinstance(event, CallbackQuery):
-                await event.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.", show_alert=True)
+                await event.answer("🚷  доступ закрыт.", show_alert=True)
             elif isinstance(event, Message):
-                await event.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.")
+                await event.answer("🚷  доступ закрыт.\n<i>аккаунт заблокирован.</i>", parse_mode="HTML")
             elif hasattr(event, "message") and event.message:
-                await event.message.answer("🚷 Ваш аккаунт заблокирован. Вход воспрещён.")
+                await event.message.answer("🚷  доступ закрыт.\n<i>аккаунт заблокирован.</i>", parse_mode="HTML")
             _log.warning("banned user blocked: user=%s", user.id)
             return
 

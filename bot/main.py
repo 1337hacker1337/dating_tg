@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from sqlalchemy import text
@@ -122,9 +123,37 @@ def build_dispatcher() -> Dispatcher:
 
 # ── Запуск ────────────────────────────────────────────────────────
 
+async def _set_commands(bot: Bot) -> None:
+    """Командное меню (синяя кнопка «/»). Базовый набор — всем, /admin — только админам."""
+    base = [
+        BotCommand(command="start",   description="анкета · меню"),
+        BotCommand(command="premium", description="✦ shroom+"),
+        BotCommand(command="filters", description="фильтры поиска"),
+        BotCommand(command="views",   description="кто смотрел"),
+        BotCommand(command="invite",  description="пригласить · бонусы"),
+        BotCommand(command="rules",   description="правила"),
+    ]
+    await bot.set_my_commands(base, scope=BotCommandScopeDefault())
+
+    # /admin показываем только администраторам — персональным scope на их чат
+    try:
+        from db.repositories.admin_repo import AdminRepository
+        async with AsyncSessionFactory() as session:
+            admin_ids = await AdminRepository(session).list_ids()
+        admin_cmds = base + [BotCommand(command="admin", description="👑 панель")]
+        for aid in admin_ids:
+            try:
+                await bot.set_my_commands(admin_cmds, scope=BotCommandScopeChat(chat_id=aid))
+            except Exception as e:
+                _log.warning("set admin commands failed for %s: %s", aid, e)
+    except Exception as e:
+        _log.warning("set admin commands skipped: %s", e)
+
+
 async def _on_startup(bot: Bot) -> None:
     await _run_migrations()
     await _ensure_first_admin()
+    await _set_commands(bot)
 
 
 async def run_polling() -> None:
