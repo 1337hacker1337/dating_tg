@@ -195,8 +195,9 @@ class BotSettings(Base):
 
 
 class ReportReasonEnum(str, enum.Enum):
-    spam  = "spam"
-    other = "other"
+    spam   = "spam"
+    nudity = "nudity"
+    other  = "other"
 
 
 class Report(Base):

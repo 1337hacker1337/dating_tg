@@ -226,7 +226,7 @@ async def adm_test_report(call: CallbackQuery, session: AsyncSession):
     admin = await _admin_user(session, call.from_user.id)
     ids = await _ensure(session, admin, 2)
     reporter, target = ids[0], ids[1]
-    await ReportRepository(session).add(reporter, target, random.choice(["spam", "other"]))
+    await ReportRepository(session).add(reporter, target, random.choice(["spam", "nudity", "other"]))
     await session.commit()
     _log.user("test report: admin=%s reporter=%s target=%s", call.from_user.id, reporter, target)
     await call.answer("🚩 репорт создан — проверь «🚩 репорты»", show_alert=True)

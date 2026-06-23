@@ -20,6 +20,10 @@ _log = log.get(__name__)
 router = Router(name="filters")
 
 
+def _has_geo(user) -> bool:
+    return user.latitude is not None and user.longitude is not None
+
+
 def _filters_text(user) -> str:
     if user.age_min is not None or user.age_max is not None:
         lo = user.age_min if user.age_min is not None else AGE_MIN
@@ -28,7 +32,14 @@ def _filters_text(user) -> str:
     else:
         age = "любой"
 
-    dist = f"до {user.max_distance_km} км" if user.max_distance_km else "без ограничения"
+    # Дистанция работает только при указанной геолокации — сообщаем об этом
+    # прямо в экране, чтобы юзер не тыкал «📍 расстояние» вслепую.
+    if not _has_geo(user):
+        dist = "нужна геолокация  <i>(укажи в «✏️ редактировать»)</i>"
+    elif user.max_distance_km:
+        dist = f"до {user.max_distance_km} км"
+    else:
+        dist = "без ограничения"
 
     looking = {"male": "парней", "female": "девушек", "any": "всех"}.get(
         user.looking_for.value if hasattr(user.looking_for, "value") else str(user.looking_for),
@@ -127,7 +138,8 @@ async def filters_age_invalid(message: Message):
     await message.answer("↑ пришли диапазон, напр. <code>18-25</code>.", parse_mode="HTML")
 
 
-# ── Расстояние (SHROOM+) ──────────────────────────────────────────
+# ── Расстояние ────────────────────────────────────────────────────
+# Жёсткий гео-фильтр доступен всем, но требует указанной геолокации.
 
 @router.callback_query(F.data == "filters:dist")
 async def filters_dist_menu(call: CallbackQuery, session: AsyncSession):
@@ -136,8 +148,10 @@ async def filters_dist_menu(call: CallbackQuery, session: AsyncSession):
     if user is None:
         await call.answer()
         return
-    if user.latitude is None or user.longitude is None:
-        await call.answer("сначала укажи геолокацию в «редактировать».", show_alert=True)
+    if not _has_geo(user):
+        await call.answer(
+            "сначала укажи геолокацию в «✏️ редактировать».", show_alert=True
+        )
         return
     await call.answer()
     await call.message.answer(
@@ -149,7 +163,14 @@ async def filters_dist_menu(call: CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data.startswith("filters:dist_set:"))
 async def filters_dist_set(call: CallbackQuery, session: AsyncSession):
     repo = UserRepository(session)
-    km   = int(call.data.split(":")[2])
+    user = await repo.get_light(call.from_user.id)
+    # Подстраховка: вдруг гео сбросили, пока меню висело открытым.
+    if user is None or not _has_geo(user):
+        await call.answer(
+            "сначала укажи геолокацию в «✏️ редактировать».", show_alert=True
+        )
+        return
+    km = int(call.data.split(":")[2])
     await repo.set_max_distance(call.from_user.id, km or None)
     await session.commit()
     _log.user("filters dist: user=%s km=%s", call.from_user.id, km)

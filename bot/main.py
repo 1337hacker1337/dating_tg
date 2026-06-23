@@ -72,6 +72,18 @@ async def _run_migrations() -> None:
         await conn.execute(text(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS city VARCHAR(64)"
         ))
+
+    # Новое значение enum причины репорта 'nudity' — для уже существующих баз.
+    # На свежей базе create_all создаёт тип сразу со всеми значениями, и здесь
+    # будет no-op. ALTER TYPE ... ADD VALUE на старых PG нельзя выполнять внутри
+    # транзакции, поэтому отдельным соединением в режиме AUTOCOMMIT.
+    # IF NOT EXISTS поддерживается с PostgreSQL 12+.
+    ac_engine = engine.execution_options(isolation_level="AUTOCOMMIT")
+    async with ac_engine.connect() as conn:
+        await conn.execute(text(
+            "ALTER TYPE reportreasonenum ADD VALUE IF NOT EXISTS 'nudity'"
+        ))
+
     _log.info("db ready")
 
 

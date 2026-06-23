@@ -117,8 +117,9 @@ def kb_filter_distance() -> InlineKeyboardMarkup:
 
 def kb_report_reasons(target_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="📢 спам / реклама", callback_data=f"report:do:{target_id}:spam")
-    b.button(text="⚙️ другое",         callback_data=f"report:do:{target_id}:other")
-    b.button(text="❌ отмена",          callback_data="report:cancel")
+    b.button(text="📢 спам / реклама",      callback_data=f"report:do:{target_id}:spam")
+    b.button(text="🔞 откровенный контент", callback_data=f"report:do:{target_id}:nudity")
+    b.button(text="⚙️ другое",              callback_data=f"report:do:{target_id}:other")
+    b.button(text="❌ отмена",              callback_data="report:cancel")
     b.adjust(1)
     return b.as_markup()
